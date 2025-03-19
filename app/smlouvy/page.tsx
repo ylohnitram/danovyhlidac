@@ -1,5 +1,7 @@
 import type { Metadata } from "next"
+import { Suspense } from "react"
 import ContractsList from "@/components/contracts-list"
+import { Loader2 } from "lucide-react"
 
 export const metadata: Metadata = {
   title: "Veřejné smlouvy | MůjDaňovýHlídač",
@@ -14,8 +16,13 @@ export default function SmlouvyPage() {
         Procházejte a vyhledávejte veřejné smlouvy z Registru smluv. Data jsou aktualizována denně.
       </p>
 
-      <ContractsList />
+      <Suspense fallback={
+        <div className="flex justify-center items-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      }>
+        <ContractsList />
+      </Suspense>
     </main>
   )
 }
-
