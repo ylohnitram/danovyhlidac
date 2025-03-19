@@ -21,6 +21,8 @@ const nextConfig = {
     parallelServerBuildTraces: true,
     parallelServerCompiles: true,
   },
+  // Přidáváme nový runtime config pro zpracování stránek
+  runtime: 'edge', // Možné hodnoty jsou 'nodejs' nebo 'edge'
 }
 
 mergeConfig(nextConfig, userConfig)
