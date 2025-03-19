@@ -408,4 +408,3 @@ export default dynamic(() => Promise.resolve(ContractsMapComponent), {
     </div>
   ),
 })
-

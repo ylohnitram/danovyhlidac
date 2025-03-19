@@ -1,14 +1,8 @@
-import dynamic from 'next/dynamic'
 import HeroSection from "@/components/hero-section"
 import TaxCalculator from "@/components/tax-calculator"
+import ContractsMap from "@/components/contracts-map"
 import TopContractors from "@/components/top-contractors"
 import UnusualContracts from "@/components/unusual-contracts"
-
-// Dynamicky importujeme ContractsMap s vypnutým SSR
-const ContractsMap = dynamic(() => import('@/components/contracts-map'), {
-  ssr: false,
-  loading: () => <div className="h-96 bg-gray-100 rounded-lg flex items-center justify-center">Načítání mapy...</div>
-})
 
 export default function Home() {
   return (
