@@ -1,0 +1,35 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Smlouva {
+  id          Int      @id @default(autoincrement())
+  nazev       String
+  castka      Float
+  kategorie   String
+  datum       DateTime
+  dodavatel   String
+  zadavatel   String
+  lat         Float?
+  lng         Float?
+  podnety     Podnet[]
+}
+
+model Podnet {
+  id          Int      @id @default(autoincrement())
+  jmeno       String
+  email       String
+  smlouva     Smlouva  @relation(fields: [smlouvaId], references: [id])
+  smlouvaId   Int
+  zprava      String
+  createdAt   DateTime @default(now())
+}
+
