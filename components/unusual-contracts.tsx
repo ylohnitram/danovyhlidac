@@ -24,7 +24,8 @@ export default function UnusualContracts() {
     setError(null);
     
     try {
-      // Check database setup first
+      // Check database setup first - we don't attempt migrations anymore
+      // but still check if the database schema is available
       const { ensureDatabaseSetup } = await import('@/lib/setup-db');
       const dbSetupResult = await ensureDatabaseSetup();
       
@@ -34,19 +35,26 @@ export default function UnusualContracts() {
           message: dbSetupResult.message || "Databáze není správně nastavena.",
           setupInProgress: false
         });
+        
+        // Try to load data anyway - in case we have mock data or cached data
+        try {
+          const result = await getNeobvykleSmlouvy();
+          if (result.data && result.data.length > 0) {
+            setContracts(result.data);
+            setIsCached(result.cached || false);
+            // If we have data, consider the database ready for display purposes
+            setDatabaseStatus({ ready: true });
+          }
+        } catch (dataErr) {
+          console.error("Nepodařilo se načíst ani zástupná data:", dataErr);
+        }
+        
         setLoading(false);
         return;
       }
       
-      if (dbSetupResult.migrationRun) {
-        setDatabaseStatus({
-          ready: true,
-          message: "Databáze byla úspěšně nastavena. Načítání dat...",
-          setupInProgress: false
-        });
-      } else {
-        setDatabaseStatus({ ready: true });
-      }
+      // Database is ready
+      setDatabaseStatus({ ready: true });
       
       const result = await getNeobvykleSmlouvy();
       setContracts(result.data);
