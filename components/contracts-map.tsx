@@ -32,6 +32,9 @@ import "leaflet/dist/leaflet.css"
 import "leaflet.markercluster/dist/MarkerCluster.css"
 import "leaflet.markercluster/dist/MarkerCluster.Default.css"
 
+// Add custom CSS for fixing z-index issues
+import { cn } from "@/lib/utils"
+
 // Mock data for contracts
 const MOCK_CONTRACTS = [
   {
@@ -249,6 +252,20 @@ const ContractsMapComponent = () => {
     setTimeout(() => {
       setLoading(false)
     }, 1000)
+
+    // Fix z-index issues by ensuring Leaflet controls have a lower z-index than our dropdowns
+    const style = document.createElement('style');
+    style.textContent = `
+      .leaflet-control { z-index: 800 !important; }
+      .leaflet-pane { z-index: 400 !important; }
+      .leaflet-top, .leaflet-bottom { z-index: 800 !important; }
+      [data-radix-popper-content-wrapper] { z-index: 1000 !important; }
+    `;
+    document.head.appendChild(style);
+
+    return () => {
+      document.head.removeChild(style);
+    };
   }, [])
 
   useEffect(() => {
@@ -295,13 +312,13 @@ const ContractsMapComponent = () => {
       <Card>
         <CardContent className="p-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
+            <div className="relative z-50">
               <Label>Kategorie</Label>
               <Select onValueChange={handleCategoryChange} defaultValue={filters.category}>
-                <SelectTrigger>
+                <SelectTrigger className="relative z-50">
                   <SelectValue placeholder="Vyberte kategorii" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="relative z-[1001]">
                   {CATEGORIES.map((category) => (
                     <SelectItem key={category.id} value={category.id}>
                       {category.name}
@@ -327,13 +344,13 @@ const ContractsMapComponent = () => {
               </div>
             </div>
 
-            <div>
+            <div className="relative z-50">
               <Label>Rok</Label>
               <Select onValueChange={handleYearChange} defaultValue="0">
-                <SelectTrigger>
+                <SelectTrigger className="relative z-50">
                   <SelectValue placeholder="Vyberte rok" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="relative z-[1001]">
                   <SelectItem value="0">Všechny roky</SelectItem>
                   {YEARS.map((year) => (
                     <SelectItem key={year} value={year.toString()}>
@@ -347,8 +364,8 @@ const ContractsMapComponent = () => {
         </CardContent>
       </Card>
 
-      <div className="h-[500px] rounded-lg overflow-hidden border">
-        <MapContainer center={[49.8, 15.5]} zoom={7} style={{ height: "100%", width: "100%" }}>
+      <div className="h-[500px] rounded-lg overflow-hidden border relative z-10">
+        <MapContainer center={[49.8, 15.5]} zoom={7} style={{ height: "100%", width: "100%" }} className="z-10">
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -374,7 +391,7 @@ const ContractsMapComponent = () => {
                           Podat podnět
                         </Button>
                       </DialogTrigger>
-                      <DialogContent>
+                      <DialogContent className="z-[1100]">
                         <DialogHeader>
                           <DialogTitle>Podat podnět k zakázce</DialogTitle>
                           <DialogDescription>
