@@ -13,12 +13,41 @@ export default function UnusualContracts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isCached, setIsCached] = useState(false);
+  const [databaseStatus, setDatabaseStatus] = useState<{
+    ready: boolean;
+    message?: string;
+    setupInProgress?: boolean;
+  }>({ ready: false });
 
   const loadData = async () => {
     setLoading(true);
     setError(null);
     
     try {
+      // Check database setup first
+      const { ensureDatabaseSetup } = await import('@/lib/setup-db');
+      const dbSetupResult = await ensureDatabaseSetup();
+      
+      if (!dbSetupResult.success) {
+        setDatabaseStatus({
+          ready: false,
+          message: dbSetupResult.message || "Databáze není správně nastavena.",
+          setupInProgress: false
+        });
+        setLoading(false);
+        return;
+      }
+      
+      if (dbSetupResult.migrationRun) {
+        setDatabaseStatus({
+          ready: true,
+          message: "Databáze byla úspěšně nastavena. Načítání dat...",
+          setupInProgress: false
+        });
+      } else {
+        setDatabaseStatus({ ready: true });
+      }
+      
       const result = await getNeobvykleSmlouvy();
       setContracts(result.data);
       setIsCached(result.cached || false);
@@ -62,6 +91,26 @@ export default function UnusualContracts() {
           Zkusit znovu
         </Button>
       </div>
+    );
+  }
+  
+  if (!databaseStatus.ready) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <div className="flex items-center gap-3 mb-4 text-amber-600">
+            <AlertTriangle className="h-5 w-5" />
+            <h3 className="font-medium">Problém s databází</h3>
+          </div>
+          <p className="text-muted-foreground mb-4">
+            {databaseStatus.message || "Databáze není správně nakonfigurována. Data nelze načíst."}
+          </p>
+          <Button onClick={loadData} variant="outline">
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Zkusit znovu
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 

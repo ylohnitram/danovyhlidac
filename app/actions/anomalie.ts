@@ -12,12 +12,68 @@ const ANOMALY_TYPES = {
   BIG_AMOUNT: "velká částka"
 };
 
+// Funkce pro získání mock dat, když databáze není připravena
+function getMockAnomalies() {
+  return [
+    {
+      id: 1001,
+      title: "Rekonstrukce silnice I/35",
+      amount: 125000000,
+      date: new Date().toISOString(),
+      contractor: "Nová Firma s.r.o.",
+      authority: "ŘSD",
+      category: "silnice",
+      flags: ["nová firma", "velká částka"],
+      description: "Společnost založená před méně než 6 měsíci získala zakázku nad 100M Kč."
+    },
+    {
+      id: 1002,
+      title: "Dodávka IT systému pro ministerstvo",
+      amount: 75000000,
+      date: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+      contractor: "Tech Solutions s.r.o.",
+      authority: "Ministerstvo financí",
+      category: "IT služby",
+      flags: ["bez výběrového řízení", "časová tíseň"],
+      description: "Zakázka zadána bez řádného výběrového řízení s odvoláním na výjimku."
+    },
+    {
+      id: 1003,
+      title: "Výstavba sportovní haly",
+      amount: 45000000,
+      date: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
+      contractor: "StavbyPlus a.s.",
+      authority: "Město Brno",
+      category: "stavebnictví",
+      flags: ["dodatky", "navýšení ceny"],
+      description: "Původní zakázka byla výrazně navýšena dodatky."
+    }
+  ];
+}
+
 export async function getNeobvykleSmlouvy(limit = 5) {
   try {
     // Zkusit načíst z cache
     const cachedData = await getCachedStats("neobvykleSmlouvy");
     if (cachedData) {
       return { data: cachedData, cached: true };
+    }
+
+    // Check if tables exist by running a simple query
+    try {
+      // This will throw an error if the table doesn't exist
+      await prisma.smlouva.findFirst();
+    } catch (schemaError) {
+      console.warn("Databázové tabulky ještě nejsou vytvořeny:", schemaError);
+      
+      // If we're in development mode, we'll provide some sample data
+      if (process.env.NODE_ENV === 'development') {
+        const mockData = getMockAnomalies();
+        return { data: mockData, cached: false, mock: true };
+      }
+      
+      // Return empty data in production rather than crashing
+      return { data: [], cached: false, dbNotReady: true };
     }
 
     // 1. Nová firma s velkou zakázkou
