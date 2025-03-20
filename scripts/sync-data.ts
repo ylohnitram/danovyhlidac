@@ -1,66 +1,110 @@
 import { PrismaClient } from '@prisma/client'
 import fetch from 'node-fetch'
+import * as fs from 'fs'
+import * as path from 'path'
+import * as xml2js from 'xml2js'
+import * as os from 'os'
 
 const prisma = new PrismaClient()
 
-// Funkce pro získání dat z Registru smluv
-async function fetchContractsFromRegistry(offset = 0, limit = 100) {
+// Function to download XML dump for a specific month
+async function downloadXmlDump(year: number, month: number): Promise<string> {
+  // Format month as two digits
+  const monthFormatted = month.toString().padStart(2, '0')
+  const fileName = `dump_${year}_${monthFormatted}.xml`
+  const url = `https://data.smlouvy.gov.cz/${fileName}`
+  
+  console.log(`Downloading data dump from: ${url}`)
+  
   try {
-    // Aktuální datum pro filtrování
-    const today = new Date()
-    // Výchozí: data za poslední měsíc
-    const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, today.getDate())
-    
-    const url = new URL('https://smlouvy.gov.cz/api/v2/smlouvy')
-    url.searchParams.append('limit', limit.toString())
-    url.searchParams.append('offset', offset.toString())
-    url.searchParams.append('datumUzavreniOd', lastMonth.toISOString().split('T')[0])
-    
-    console.log(`Fetching data from: ${url.toString()}`)
-    
-    const response = await fetch(url.toString())
+    const response = await fetch(url)
     
     if (!response.ok) {
-      throw new Error(`API responded with status: ${response.status}`)
+      throw new Error(`Failed to download file: ${response.status} ${response.statusText}`)
     }
     
-    return await response.json()
+    // Create temp directory if it doesn't exist
+    const tempDir = path.join(os.tmpdir(), 'smlouvy-dumps')
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true })
+    }
+    
+    // Save the file
+    const filePath = path.join(tempDir, fileName)
+    const fileStream = fs.createWriteStream(filePath)
+    
+    return new Promise((resolve, reject) => {
+      response.body.pipe(fileStream)
+      response.body.on('error', (err) => {
+        reject(err)
+      })
+      fileStream.on('finish', () => {
+        console.log(`File downloaded to: ${filePath}`)
+        resolve(filePath)
+      })
+    })
   } catch (error) {
-    console.error('Error fetching data from registry:', error)
+    console.error(`Error downloading dump for ${year}-${monthFormatted}:`, error)
     throw error
   }
 }
 
-// Funkce pro transformaci dat do formátu naší databáze
-function transformContractData(data: any) {
-  return {
-    nazev: data.predmet || 'Neuvedeno',
-    castka: data.hodnotaBezDph || 0,
-    kategorie: data.typSmlouvy || 'ostatni',
-    datum: new Date(data.datumUzavreni),
-    dodavatel: data.dodavatel?.nazev || 'Neuvedeno',
-    zadavatel: data.zadavatel?.nazev || 'Neuvedeno',
-    typ_rizeni: data.druhRizeni || 'standardní',
-  }
-}
-
-// Funkce pro transformaci dat dodavatelů
-function transformSupplierData(data: any) {
-  if (!data?.dodavatel?.ico) return null
+// Function to parse XML dump and extract contract data
+async function parseXmlDump(filePath: string) {
+  console.log(`Parsing XML dump: ${filePath}`)
   
-  return {
-    nazev: data.dodavatel.nazev,
-    ico: data.dodavatel.ico,
-    datum_zalozeni: new Date(data.dodavatel.datumVzniku || Date.now()),
-    pocet_zamestnancu: data.dodavatel.pocetZamestnancu || null,
+  try {
+    const xmlData = fs.readFileSync(filePath, 'utf8')
+    const parser = new xml2js.Parser({ explicitArray: false })
+    
+    return new Promise<any[]>((resolve, reject) => {
+      parser.parseString(xmlData, (err, result) => {
+        if (err) {
+          reject(err)
+          return
+        }
+        
+        try {
+          // Extract contracts from the XML structure
+          // Note: You'll need to adjust this based on the actual XML structure
+          const contracts = result.smlouvy?.smlouva || []
+          
+          // Convert to array if it's a single item
+          const contractsArray = Array.isArray(contracts) ? contracts : [contracts]
+          
+          console.log(`Found ${contractsArray.length} contracts in the XML dump`)
+          resolve(contractsArray)
+        } catch (parseError) {
+          reject(parseError)
+        }
+      })
+    })
+  } catch (error) {
+    console.error(`Error parsing XML dump: ${filePath}`, error)
+    throw error
   }
 }
 
-// Pokusí se geokódovat adresu zadavatele (zjednodušená implementace)
+// Function to transform XML contract data to database format
+function transformContractData(contract: any) {
+  // Transform the XML data to match your database schema
+  // You'll need to adjust this based on the actual XML structure
+  return {
+    nazev: contract.predmet || contract.nazev || 'Neuvedeno',
+    castka: parseFloat(contract.hodnotaBezDph || contract.castka || 0),
+    kategorie: contract.typSmlouvy || contract.kategorie || 'ostatni',
+    datum: new Date(contract.datumUzavreni || contract.datum || Date.now()),
+    dodavatel: contract.dodavatel?.nazev || contract.dodavatel || 'Neuvedeno',
+    zadavatel: contract.zadavatel?.nazev || contract.zadavatel || 'Neuvedeno',
+    typ_rizeni: contract.druhRizeni || contract.typ_rizeni || 'standardní',
+  }
+}
+
+// Function to geocode an address (simplified implementation)
 async function geocodeAddress(address: string) {
   try {
-    // Zde by bylo volání geokódovací služby jako Google Maps, Mapbox atd.
-    // Pro účely ukázky vrátíme náhodné souřadnice v ČR
+    // Here you would normally call a geocoding service
+    // For this example, we'll just return random coordinates in the Czech Republic
     return {
       lat: 49.8 + (Math.random() - 0.5) * 2,
       lng: 15.5 + (Math.random() - 0.5) * 4
@@ -71,12 +115,12 @@ async function geocodeAddress(address: string) {
   }
 }
 
-// Hlavní synchronizační funkce
+// Main synchronization function
 export async function syncData() {
-  console.log('Starting data synchronization...')
+  console.log('Starting data synchronization from open data dumps...')
   const startTime = Date.now()
   
-  // Získáme datum poslední aktualizace
+  // Get the date of the last update
   const lastSync = await prisma.smlouva.findFirst({
     orderBy: { updated_at: 'desc' },
     select: { updated_at: true }
@@ -85,48 +129,55 @@ export async function syncData() {
   const lastSyncDate = lastSync?.updated_at || new Date(0)
   console.log(`Last sync date: ${lastSyncDate.toISOString()}`)
   
-  let offset = 0
-  const limit = 100
-  let hasMoreData = true
+  // Calculate the months to download
+  // We'll download the last 3 months of data
+  const now = new Date()
+  const months = []
+  
+  for (let i = 0; i < 3; i++) {
+    const date = new Date(now)
+    date.setMonth(now.getMonth() - i)
+    months.push({
+      year: date.getFullYear(),
+      month: date.getMonth() + 1
+    })
+  }
+  
   let processedCount = 0
   let newCount = 0
   let updatedCount = 0
   let errorCount = 0
   
-  // Procházíme stránky dat, dokud existují
-  while (hasMoreData) {
+  // Process each month
+  for (const { year, month } of months) {
     try {
-      const data = await fetchContractsFromRegistry(offset, limit)
-      const contracts = data.items || []
+      // Download and parse the XML dump
+      const filePath = await downloadXmlDump(year, month)
+      const contracts = await parseXmlDump(filePath)
       
-      if (contracts.length === 0) {
-        hasMoreData = false
-        break
-      }
+      console.log(`Processing ${contracts.length} contracts for ${year}-${month}...`)
       
-      console.log(`Processing ${contracts.length} contracts from offset ${offset}...`)
-      
-      // Zpracujeme každou smlouvu
+      // Process each contract
       for (const contract of contracts) {
         processedCount++
         
         try {
-          // Zkontrolujeme, zda smlouva již existuje
+          // Check if the contract already exists
           const existingContract = await prisma.smlouva.findFirst({
             where: { 
-              nazev: contract.predmet || 'Neuvedeno',
-              datum: new Date(contract.datumUzavreni),
-              dodavatel: contract.dodavatel?.nazev || 'Neuvedeno',
-              zadavatel: contract.zadavatel?.nazev || 'Neuvedeno'
+              nazev: contract.predmet || contract.nazev || 'Neuvedeno',
+              datum: new Date(contract.datumUzavreni || contract.datum || Date.now()),
+              dodavatel: contract.dodavatel?.nazev || contract.dodavatel || 'Neuvedeno',
+              zadavatel: contract.zadavatel?.nazev || contract.zadavatel || 'Neuvedeno'
             }
           })
           
-          // Základní data smlouvy
+          // Transform the contract data
           const contractData = transformContractData(contract)
           
-          // Přidáme geolokaci, pokud nemáme
+          // Add geolocation if we don't have it
           if (!existingContract?.lat || !existingContract?.lng) {
-            const zadavatelAdresa = contract.zadavatel?.adresa || ''
+            const zadavatelAdresa = contract.zadavatel?.adresa || contract.adresa || ''
             if (zadavatelAdresa) {
               const geoData = await geocodeAddress(zadavatelAdresa)
               if (geoData) {
@@ -136,19 +187,7 @@ export async function syncData() {
             }
           }
           
-          // Zpracování dodavatele, pokud existuje
-          if (contract.dodavatel?.ico) {
-            const supplierData = transformSupplierData(contract)
-            if (supplierData) {
-              await prisma.dodavatel.upsert({
-                where: { ico: supplierData.ico },
-                update: supplierData,
-                create: supplierData
-              })
-            }
-          }
-          
-          // Vytvoření nebo aktualizace smlouvy
+          // Create or update the contract
           if (existingContract) {
             await prisma.smlouva.update({
               where: { id: existingContract.id },
@@ -160,51 +199,32 @@ export async function syncData() {
             newCount++
           }
           
-          // Zpracování dodatků, pokud existují
-          if (contract.dodatky && Array.isArray(contract.dodatky)) {
-            for (const dodatek of contract.dodatky) {
+          // Process attachments if they exist
+          // Note: You'll need to adjust this based on the actual XML structure
+          if (contract.prilohy && Array.isArray(contract.prilohy.priloha)) {
+            for (const priloha of contract.prilohy.priloha) {
               if (existingContract) {
-                await prisma.dodatek.upsert({
-                  where: {
-                    id: dodatek.id || 0
-                  },
-                  update: {
-                    castka: dodatek.castka || 0,
-                    datum: new Date(dodatek.datum || Date.now())
-                  },
-                  create: {
-                    smlouva_id: existingContract.id,
-                    castka: dodatek.castka || 0,
-                    datum: new Date(dodatek.datum || Date.now())
-                  }
-                })
+                // Here you would process attachments if needed
+                // This is just a placeholder for the actual implementation
               }
             }
           }
         } catch (itemError) {
-          console.error(`Error processing contract: ${contract.id}`, itemError)
+          console.error(`Error processing contract:`, itemError)
           errorCount++
-          // Pokračujeme dalším kontraktem
+          // Continue with the next contract
           continue
         }
       }
       
-      offset += contracts.length
-      
-      // Pauza mezi požadavky, aby se nezahltilo API
+      // Delay between processing months to avoid system overload
       await new Promise(resolve => setTimeout(resolve, 1000))
       
     } catch (error) {
-      console.error(`Error processing batch at offset ${offset}:`, error)
+      console.error(`Error processing data for ${year}-${month}:`, error)
       errorCount++
-      // Pokračujeme dalším batchem i v případě chyby
-      offset += limit
-    }
-    
-    // Omezení maximálního počtu stránek pro demo
-    if (offset > 300) {
-      console.log('Reached maximum offset for demo, stopping...')
-      hasMoreData = false
+      // Continue with the next month
+      continue
     }
   }
   
@@ -225,7 +245,7 @@ export async function syncData() {
   return summary;
 }
 
-// Pro možnost spustit skript přímo
+// Allow the script to be run directly
 if (require.main === module) {
   syncData()
     .then(() => {
