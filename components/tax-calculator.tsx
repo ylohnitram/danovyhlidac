@@ -718,28 +718,72 @@ export default function TaxCalculator() {
                         <div className="grid md:grid-cols-2 gap-6">
                           <div>
                             <h4 className="font-medium mb-2">Rozložení příspěvku</h4>
-                            <div className="h-64">
+                            <div className="h-72"> {/* Increased height for better spacing */}
                               <ResponsiveContainer width="100%" height="100%">
                                 <PieChart>
                                   <Pie
                                     data={result.breakdown}
                                     cx="50%"
                                     cy="50%"
-                                    labelLine={false}
-                                    outerRadius={80}
+                                    labelLine={true} {/* Enable label lines */}
+                                    outerRadius={70} {/* Slightly smaller radius to leave room for labels */}
                                     fill="#8884d8"
                                     dataKey="value"
                                     nameKey="name"
-                                    label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                                    label={({
+                                      cx,
+                                      cy,
+                                      midAngle,
+                                      innerRadius,
+                                      outerRadius,
+                                      percent,
+                                      name
+                                    }) => {
+                                      const RADIAN = Math.PI / 180;
+                                      // Position labels further away from the pie
+                                      const radius = outerRadius * 1.4;
+                                      const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                                      const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                                      
+                                      return (
+                                        <text
+                                          x={x}
+                                          y={y}
+                                          fill="#000000"
+                                          textAnchor={x > cx ? 'start' : 'end'}
+                                          dominantBaseline="central"
+                                          fontSize="12"
+                                          fontWeight="500"
+                                        >
+                                          {`${name}: ${(percent * 100).toFixed(0)}%`}
+                                        </text>
+                                      );
+                                    }}
                                   >
                                     {result.breakdown.map((entry, index) => (
                                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                     ))}
                                   </Pie>
-                                  <Tooltip formatter={(value: number) => formatCurrency(value)} />
-                                  <Legend />
+                                  <Tooltip 
+                                    formatter={(value: number) => formatCurrency(value)} 
+                                    contentStyle={{ fontWeight: 'bold' }}
+                                  />
                                 </PieChart>
                               </ResponsiveContainer>
+                            </div>
+                            
+                            {/* Add a clear legend below the chart for redundancy and clarity */}
+                            <div className="mt-4 grid grid-cols-1 gap-2">
+                              {result.breakdown.map((entry, index) => (
+                                <div key={`legend-${index}`} className="flex items-center">
+                                  <div 
+                                    className="w-4 h-4 mr-2 rounded-sm" 
+                                    style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                                  />
+                                  <span className="text-sm font-medium">{entry.name}: </span>
+                                  <span className="text-sm ml-1">{formatCurrency(entry.value)} ({((entry.value / result.totalContribution) * 100).toFixed(0)}%)</span>
+                                </div>
+                              ))}
                             </div>
                           </div>
 
