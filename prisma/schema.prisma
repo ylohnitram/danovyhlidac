@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -18,18 +15,39 @@ model Smlouva {
   datum       DateTime
   dodavatel   String
   zadavatel   String
+  typ_rizeni  String?  @default("standardní")
   lat         Float?
   lng         Float?
   podnety     Podnet[]
+  dodatky     Dodatek[]
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+}
+
+model Dodavatel {
+  nazev          String   @id
+  ico            String   @unique
+  datum_zalozeni DateTime
+  pocet_zamestnancu Int?
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+}
+
+model Dodatek {
+  id         Int      @id @default(autoincrement())
+  smlouva    Smlouva  @relation(fields: [smlouva_id], references: [id])
+  smlouva_id Int
+  castka     Float
+  datum      DateTime
+  created_at DateTime @default(now())
 }
 
 model Podnet {
-  id          Int      @id @default(autoincrement())
-  jmeno       String
-  email       String
-  smlouva     Smlouva  @relation(fields: [smlouvaId], references: [id])
-  smlouvaId   Int
-  zprava      String
-  createdAt   DateTime @default(now())
+  id         Int      @id @default(autoincrement())
+  jmeno      String
+  email      String
+  smlouva    Smlouva  @relation(fields: [smlouva_id], references: [id])
+  smlouva_id Int
+  zprava     String
+  created_at DateTime @default(now())
 }
-
