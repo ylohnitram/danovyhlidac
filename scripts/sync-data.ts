@@ -1,9 +1,9 @@
 import { PrismaClient } from '@prisma/client'
 import fetch from 'node-fetch'
-import * as fs from 'fs'
-import * as path from 'path'
-import * as xml2js from 'xml2js'
-import * as os from 'os'
+import fs from 'fs'
+import path from 'path'
+import xml2js from 'xml2js'
+import os from 'os'
 
 const prisma = new PrismaClient()
 
@@ -72,12 +72,15 @@ async function parseXmlDump(filePath: string) {
   console.log(`Parsing XML dump: ${filePath}`)
   
   try {
+    console.log(`Reading file: ${filePath}`)
     const xmlData = fs.readFileSync(filePath, 'utf8')
+    console.log(`File read successfully. Size: ${xmlData.length} bytes`)
     const parser = new xml2js.Parser({ explicitArray: false })
     
     return new Promise<any[]>((resolve, reject) => {
       parser.parseString(xmlData, (err, result) => {
         if (err) {
+          console.error(`XML parsing error: ${err.message}`)
           reject(err)
           return
         }
@@ -85,6 +88,12 @@ async function parseXmlDump(filePath: string) {
         try {
           // Extract contracts from the XML structure
           // Note: You'll need to adjust this based on the actual XML structure
+          if (!result || !result.smlouvy) {
+            console.warn('XML structure does not match expected format. Got:', Object.keys(result || {}))
+            resolve([]) // Return empty array instead of failing
+            return
+          }
+          
           const contracts = result.smlouvy?.smlouva || []
           
           // Convert to array if it's a single item
@@ -93,6 +102,7 @@ async function parseXmlDump(filePath: string) {
           console.log(`Found ${contractsArray.length} contracts in the XML dump`)
           resolve(contractsArray)
         } catch (parseError) {
+          console.error(`Error processing parsed XML:`, parseError)
           reject(parseError)
         }
       })
@@ -264,7 +274,9 @@ export async function syncData() {
 }
 
 // Allow the script to be run directly
-if (require.main === module) {
+const isRunningDirectly = require.main === module;
+
+if (isRunningDirectly) {
   syncData()
     .then(() => {
       console.log('Data sync completed successfully')
