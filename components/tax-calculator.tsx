@@ -113,20 +113,7 @@ const formSchema = z.object({
     .min(0, {
       message: "Hodnota musí být kladné číslo",
     })
-    .optional()
-    .refine(
-      (val, ctx) => {
-        // If property type is not "none", value is required
-        if (ctx.parent.propertyType !== "none" && (!val || val <= 0)) {
-          return false;
-        }
-        return true;
-      },
-      {
-        message: "Zadejte hodnotu nemovitosti",
-        path: ["propertyValue"],
-      }
-    ),
+    .optional(),
 
   // Step 3: Additional Information
   dependents: z.coerce.number().min(0).default(0),
@@ -274,12 +261,19 @@ export default function TaxCalculator() {
       isValid = await form.trigger(["city", "income", "taxYear"])
     } else if (currentStep === 1) {
       // Validate step 2 fields
-      if (propertyType === "none") {
-        // If no property, just validate property type
-        isValid = await form.trigger("propertyType")
-      } else {
-        // Validate both property type and value
-        isValid = await form.trigger(["propertyType", "propertyValue"])
+      isValid = await form.trigger("propertyType")
+      
+      // Only validate property value if property type is not "none"
+      if (isValid && propertyType !== "none") {
+        const propertyValueValid = await form.trigger("propertyValue")
+        const propertyValue = form.getValues("propertyValue")
+        
+        if (!propertyValueValid || !propertyValue || propertyValue <= 0) {
+          form.setError("propertyValue", { 
+            message: "Zadejte hodnotu nemovitosti" 
+          })
+          isValid = false
+        }
       }
     } else if (currentStep === 2) {
       // Validate step 3 fields (or submit)
