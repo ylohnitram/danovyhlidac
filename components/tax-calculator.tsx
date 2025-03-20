@@ -204,6 +204,29 @@ function StepIndicator({ currentStep, totalSteps }: { currentStep: number; total
   )
 }
 
+// Custom label renderer for pie chart
+const renderCustomizedLabel = (props: any) => {
+  const { cx, cy, midAngle, innerRadius, outerRadius, percent, name } = props;
+  const RADIAN = Math.PI / 180;
+  const radius = outerRadius * 1.4;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  
+  return (
+    <text
+      x={x}
+      y={y}
+      fill="#000000"
+      textAnchor={x > cx ? 'start' : 'end'}
+      dominantBaseline="central"
+      fontSize={12}
+      fontWeight="500"
+    >
+      {`${name}: ${(percent * 100).toFixed(0)}%`}
+    </text>
+  );
+};
+
 export default function TaxCalculator() {
   // State for the current step
   const [currentStep, setCurrentStep] = useState(0)
@@ -718,47 +741,19 @@ export default function TaxCalculator() {
                         <div className="grid md:grid-cols-2 gap-6">
                           <div>
                             <h4 className="font-medium mb-2">Rozložení příspěvku</h4>
-                            <div className="h-72"> {/* Increased height for better spacing */}
+                            <div className="h-72">
                               <ResponsiveContainer width="100%" height="100%">
                                 <PieChart>
                                   <Pie
                                     data={result.breakdown}
                                     cx="50%"
                                     cy="50%"
-                                    labelLine={true} {/* Enable label lines */}
-                                    outerRadius={70} {/* Slightly smaller radius to leave room for labels */}
+                                    labelLine={true}
+                                    outerRadius={70}
                                     fill="#8884d8"
                                     dataKey="value"
                                     nameKey="name"
-                                    label={({
-                                      cx,
-                                      cy,
-                                      midAngle,
-                                      innerRadius,
-                                      outerRadius,
-                                      percent,
-                                      name
-                                    }) => {
-                                      const RADIAN = Math.PI / 180;
-                                      // Position labels further away from the pie
-                                      const radius = outerRadius * 1.4;
-                                      const x = cx + radius * Math.cos(-midAngle * RADIAN);
-                                      const y = cy + radius * Math.sin(-midAngle * RADIAN);
-                                      
-                                      return (
-                                        <text
-                                          x={x}
-                                          y={y}
-                                          fill="#000000"
-                                          textAnchor={x > cx ? 'start' : 'end'}
-                                          dominantBaseline="central"
-                                          fontSize="12"
-                                          fontWeight="500"
-                                        >
-                                          {`${name}: ${(percent * 100).toFixed(0)}%`}
-                                        </text>
-                                      );
-                                    }}
+                                    label={renderCustomizedLabel}
                                   >
                                     {result.breakdown.map((entry, index) => (
                                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
