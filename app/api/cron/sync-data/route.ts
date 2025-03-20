@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { syncData } from '@/scripts/sync-data'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300 // maximální doba běhu 5 minut
+export const maxDuration = 60 // maximální doba běhu 1 minuta
 
 export async function GET(request: Request) {
   try {
