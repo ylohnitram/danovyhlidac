@@ -12,6 +12,36 @@ body {
   }
 }
 
+/* Fix z-index issues with Leaflet and UI components */
+:root {
+  /* Ensure Radix UI popups have higher z-index than Leaflet */
+  --radix-dropdown-menu-content-z-index: 9000;
+  --radix-select-content-z-index: 9000;
+  --radix-popover-content-z-index: 9000;
+  --radix-dialog-overlay-z-index: 9000;
+  --radix-dialog-content-z-index: 9500;
+  --radix-toast-z-index: 9999;
+}
+
+/* Override Leaflet z-index values */
+.leaflet-pane {
+  z-index: 400 !important;
+}
+
+.leaflet-control {
+  z-index: 800 !important;
+}
+
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 800 !important;
+}
+
+/* Ensure select elements have proper stacking */
+[data-radix-popper-content-wrapper] {
+  z-index: 9000 !important;
+}
+
 @layer base {
   :root {
     --background: 0 0% 100%;

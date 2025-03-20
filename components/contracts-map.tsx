@@ -26,14 +26,12 @@ import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
+import MapWrapper from "./map-wrapper" // Import the wrapper component
 
 // Import Leaflet CSS
 import "leaflet/dist/leaflet.css"
 import "leaflet.markercluster/dist/MarkerCluster.css"
 import "leaflet.markercluster/dist/MarkerCluster.Default.css"
-
-// Add custom CSS for fixing z-index issues
-import { cn } from "@/lib/utils"
 
 // Mock data for contracts
 const MOCK_CONTRACTS = [
@@ -252,20 +250,6 @@ const ContractsMapComponent = () => {
     setTimeout(() => {
       setLoading(false)
     }, 1000)
-
-    // Fix z-index issues by ensuring Leaflet controls have a lower z-index than our dropdowns
-    const style = document.createElement('style');
-    style.textContent = `
-      .leaflet-control { z-index: 800 !important; }
-      .leaflet-pane { z-index: 400 !important; }
-      .leaflet-top, .leaflet-bottom { z-index: 800 !important; }
-      [data-radix-popper-content-wrapper] { z-index: 1000 !important; }
-    `;
-    document.head.appendChild(style);
-
-    return () => {
-      document.head.removeChild(style);
-    };
   }, [])
 
   useEffect(() => {
@@ -312,13 +296,13 @@ const ContractsMapComponent = () => {
       <Card>
         <CardContent className="p-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="relative z-50">
+            <div>
               <Label>Kategorie</Label>
               <Select onValueChange={handleCategoryChange} defaultValue={filters.category}>
-                <SelectTrigger className="relative z-50">
+                <SelectTrigger>
                   <SelectValue placeholder="Vyberte kategorii" />
                 </SelectTrigger>
-                <SelectContent className="relative z-[1001]">
+                <SelectContent>
                   {CATEGORIES.map((category) => (
                     <SelectItem key={category.id} value={category.id}>
                       {category.name}
@@ -344,13 +328,13 @@ const ContractsMapComponent = () => {
               </div>
             </div>
 
-            <div className="relative z-50">
+            <div>
               <Label>Rok</Label>
               <Select onValueChange={handleYearChange} defaultValue="0">
-                <SelectTrigger className="relative z-50">
+                <SelectTrigger>
                   <SelectValue placeholder="Vyberte rok" />
                 </SelectTrigger>
-                <SelectContent className="relative z-[1001]">
+                <SelectContent>
                   <SelectItem value="0">Všechny roky</SelectItem>
                   {YEARS.map((year) => (
                     <SelectItem key={year} value={year.toString()}>
@@ -364,50 +348,52 @@ const ContractsMapComponent = () => {
         </CardContent>
       </Card>
 
-      <div className="h-[500px] rounded-lg overflow-hidden border relative z-10">
-        <MapContainer center={[49.8, 15.5]} zoom={7} style={{ height: "100%", width: "100%" }} className="z-10">
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          <MarkerClusterGroup>
-            {contracts.map((contract) => (
-              <Marker key={contract.id} position={[contract.lat, contract.lng]} icon={customIcon}>
-                <Popup>
-                  <div className="space-y-2 p-1">
-                    <h3 className="font-semibold">{contract.name}</h3>
-                    <p className="text-sm">
-                      <strong>Částka:</strong> {contract.amount.toLocaleString("cs-CZ")} Kč
-                    </p>
-                    <p className="text-sm">
-                      <strong>Dodavatel:</strong> {contract.contractor}
-                    </p>
-                    <p className="text-sm">
-                      <strong>Zadavatel:</strong> {contract.contracting_authority}
-                    </p>
-                    <Dialog>
-                      <DialogTrigger asChild>
-                        <Button size="sm" variant="outline" className="w-full mt-2">
-                          Podat podnět
-                        </Button>
-                      </DialogTrigger>
-                      <DialogContent className="z-[1100]">
-                        <DialogHeader>
-                          <DialogTitle>Podat podnět k zakázce</DialogTitle>
-                          <DialogDescription>
-                            Pokud se vám tato zakázka zdá podezřelá, můžete podat podnět k prošetření.
-                          </DialogDescription>
-                        </DialogHeader>
-                        <ReportForm contractId={contract.id} contractName={contract.name} />
-                      </DialogContent>
-                    </Dialog>
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-          </MarkerClusterGroup>
-        </MapContainer>
-      </div>
+      <MapWrapper>
+        <div className="h-[500px] rounded-lg overflow-hidden border map-container">
+          <MapContainer center={[49.8, 15.5]} zoom={7} style={{ height: "100%", width: "100%" }}>
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            <MarkerClusterGroup>
+              {contracts.map((contract) => (
+                <Marker key={contract.id} position={[contract.lat, contract.lng]} icon={customIcon}>
+                  <Popup>
+                    <div className="space-y-2 p-1">
+                      <h3 className="font-semibold">{contract.name}</h3>
+                      <p className="text-sm">
+                        <strong>Částka:</strong> {contract.amount.toLocaleString("cs-CZ")} Kč
+                      </p>
+                      <p className="text-sm">
+                        <strong>Dodavatel:</strong> {contract.contractor}
+                      </p>
+                      <p className="text-sm">
+                        <strong>Zadavatel:</strong> {contract.contracting_authority}
+                      </p>
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button size="sm" variant="outline" className="w-full mt-2">
+                            Podat podnět
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Podat podnět k zakázce</DialogTitle>
+                            <DialogDescription>
+                              Pokud se vám tato zakázka zdá podezřelá, můžete podat podnět k prošetření.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <ReportForm contractId={contract.id} contractName={contract.name} />
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                  </Popup>
+                </Marker>
+              ))}
+            </MarkerClusterGroup>
+          </MapContainer>
+        </div>
+      </MapWrapper>
 
       <div className="text-sm text-muted-foreground text-center">
         Zobrazeno {contracts.length} z {MOCK_CONTRACTS.length} zakázek
