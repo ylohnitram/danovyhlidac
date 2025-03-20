@@ -1,11 +1,17 @@
-import { PrismaClient } from '@prisma/client'
-import fetch from 'node-fetch'
 import fs from 'fs'
 import path from 'path'
+import fetch from 'node-fetch'
 import xml2js from 'xml2js'
+import { PrismaClient } from '@prisma/client'
 import os from 'os'
 
 const prisma = new PrismaClient()
+const TEMP_DIR = '/tmp/smlouvy-dumps'
+
+// Create temp directory if it doesn't exist
+if (!fs.existsSync(TEMP_DIR)) {
+  fs.mkdirSync(TEMP_DIR, { recursive: true })
+}
 
 // Rozšířená definice typů pro contractData
 interface ContractData {
@@ -75,7 +81,7 @@ async function parseXmlDump(filePath: string) {
     console.log(`Reading file: ${filePath}`)
     const xmlData = fs.readFileSync(filePath, 'utf8')
     console.log(`File read successfully. Size: ${xmlData.length} bytes`)
-    const parser = new xml2js.Parser({ explicitArray: false })
+    const parser = new xml2js.Parser({ explicitArray: true })
     
     return new Promise<any[]>((resolve, reject) => {
       parser.parseString(xmlData, (err, result) => {
@@ -86,21 +92,69 @@ async function parseXmlDump(filePath: string) {
         }
         
         try {
-          // Extract contracts from the XML structure
-          // Note: You'll need to adjust this based on the actual XML structure
-          if (!result || !result.smlouvy) {
-            console.warn('XML structure does not match expected format. Got:', Object.keys(result || {}))
-            resolve([]) // Return empty array instead of failing
+          // Inspect the actual XML structure for debugging
+          console.log('XML structure root elements:', Object.keys(result || {}))
+          
+          // Check if 'dump' is the root element instead of 'smlouvy'
+          if (!result) {
+            console.warn('Result is undefined or null')
+            resolve([])
             return
           }
           
-          const contracts = result.smlouvy?.smlouva || []
+          if (result.dump) {
+            console.log('Found dump as root element. Checking its properties:', Object.keys(result.dump))
+            
+            // If 'dump' contains 'smlouva' elements directly
+            if (result.dump.smlouva) {
+              const contracts = result.dump.smlouva
+              const contractsArray = Array.isArray(contracts) ? contracts : [contracts]
+              console.log(`Found ${contractsArray.length} contracts in the XML dump under dump.smlouva`)
+              resolve(contractsArray)
+              return
+            }
+            
+            // If 'dump' contains 'smlouvy' which contains 'smlouva'
+            if (result.dump.smlouvy) {
+              console.log('Found smlouvy under dump. Checking its properties:', Object.keys(result.dump.smlouvy[0] || {}))
+              const contracts = result.dump.smlouvy[0]?.smlouva || []
+              const contractsArray = Array.isArray(contracts) ? contracts : [contracts]
+              console.log(`Found ${contractsArray.length} contracts in the XML dump under dump.smlouvy.smlouva`)
+              resolve(contractsArray)
+              return
+            }
+            
+            // Check if there are any arrays that might contain contracts
+            for (const key in result.dump) {
+              if (Array.isArray(result.dump[key])) {
+                console.log(`Found array in dump.${key} with ${result.dump[key].length} items`)
+                if (result.dump[key].length > 0) {
+                  console.log(`Sample item keys:`, Object.keys(result.dump[key][0] || {}))
+                }
+              }
+            }
+            
+            // Check if there's a 'zaznamy' element which might be the Czech word for 'records'
+            if (result.dump.zaznamy) {
+              console.log('Found zaznamy element. Checking its properties:', Object.keys(result.dump.zaznamy[0] || {}))
+              if (result.dump.zaznamy[0]?.zaznam) {
+                const records = result.dump.zaznamy[0].zaznam
+                console.log(`Found ${records.length} records in the XML dump under dump.zaznamy.zaznam`)
+                resolve(records)
+                return
+              }
+            }
+          } else if (result.smlouvy) {
+            // Original expected format
+            const contracts = result.smlouvy[0]?.smlouva || []
+            const contractsArray = Array.isArray(contracts) ? contracts : [contracts]
+            console.log(`Found ${contractsArray.length} contracts in the XML dump under smlouvy.smlouva`)
+            resolve(contractsArray)
+            return
+          }
           
-          // Convert to array if it's a single item
-          const contractsArray = Array.isArray(contracts) ? contracts : [contracts]
-          
-          console.log(`Found ${contractsArray.length} contracts in the XML dump`)
-          resolve(contractsArray)
+          console.warn('Could not locate contracts in the XML structure')
+          resolve([]) // Return empty array instead of failing
         } catch (parseError) {
           console.error(`Error processing parsed XML:`, parseError)
           reject(parseError)
@@ -118,14 +172,22 @@ function transformContractData(contract: any): ContractData {
   // Transform the XML data to match your database schema
   // You'll need to adjust this based on the actual XML structure
   return {
-    nazev: contract.predmet || contract.nazev || 'Neuvedeno',
-    castka: parseFloat(contract.hodnotaBezDph || contract.castka || 0),
-    kategorie: contract.typSmlouvy || contract.kategorie || 'ostatni',
-    datum: new Date(contract.datumUzavreni || contract.datum || Date.now()),
-    dodavatel: contract.dodavatel?.nazev || contract.dodavatel || 'Neuvedeno',
-    zadavatel: contract.zadavatel?.nazev || contract.zadavatel || 'Neuvedeno',
-    typ_rizeni: contract.druhRizeni || contract.typ_rizeni || 'standardní',
+    nazev: extractFirstValue(contract.predmet) || extractFirstValue(contract.nazev) || 'Neuvedeno',
+    castka: parseFloat(extractFirstValue(contract.hodnotaBezDph) || extractFirstValue(contract.castka) || '0'),
+    kategorie: extractFirstValue(contract.typSmlouvy) || extractFirstValue(contract.kategorie) || 'ostatni',
+    datum: new Date(extractFirstValue(contract.datumUzavreni) || extractFirstValue(contract.datum) || Date.now()),
+    dodavatel: extractFirstValue(contract.dodavatel?.[0]?.nazev) || extractFirstValue(contract.dodavatel) || 'Neuvedeno',
+    zadavatel: extractFirstValue(contract.zadavatel?.[0]?.nazev) || extractFirstValue(contract.zadavatel) || 'Neuvedeno',
+    typ_rizeni: extractFirstValue(contract.druhRizeni) || extractFirstValue(contract.typ_rizeni) || 'standardní',
   }
+}
+
+// Helper function to extract the first value from an array or return undefined
+function extractFirstValue(value: any): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0]?.toString();
+  }
+  return value?.toString();
 }
 
 // Function to geocode an address (simplified implementation)
@@ -148,7 +210,7 @@ export async function syncData() {
   console.log('Starting data synchronization from open data dumps...')
   const startTime = Date.now()
   
-  // Get the date of the last update
+  // Get the date of the last update - using updated_at from a Smlouva record
   const lastSync = await prisma.smlouva.findFirst({
     orderBy: { updated_at: 'desc' },
     select: { updated_at: true }
@@ -190,22 +252,25 @@ export async function syncData() {
         processedCount++
         
         try {
-          // Check if the contract already exists
-          const existingContract = await prisma.smlouva.findFirst({
-            where: { 
-              nazev: contract.predmet || contract.nazev || 'Neuvedeno',
-              datum: new Date(contract.datumUzavreni || contract.datum || Date.now()),
-              dodavatel: contract.dodavatel?.nazev || contract.dodavatel || 'Neuvedeno',
-              zadavatel: contract.zadavatel?.nazev || contract.zadavatel || 'Neuvedeno'
-            }
-          })
-          
           // Transform the contract data
           const contractData: ContractData = transformContractData(contract)
           
+          // Generate a unique identifier for the contract
+          const contractIdentifier = `${contractData.nazev}-${contractData.datum.toISOString()}-${contractData.dodavatel}-${contractData.zadavatel}`.substring(0, 100)
+          
+          // Check if the contract already exists
+          const existingContract = await prisma.smlouva.findFirst({
+            where: { 
+              nazev: contractData.nazev,
+              datum: contractData.datum,
+              dodavatel: contractData.dodavatel,
+              zadavatel: contractData.zadavatel
+            }
+          })
+          
           // Add geolocation if we don't have it
           if (!existingContract?.lat || !existingContract?.lng) {
-            const zadavatelAdresa = contract.zadavatel?.adresa || contract.adresa || ''
+            const zadavatelAdresa = extractFirstValue(contract.zadavatel?.[0]?.adresa) || extractFirstValue(contract.adresa) || ''
             if (zadavatelAdresa) {
               const geoData = await geocodeAddress(zadavatelAdresa)
               if (geoData) {
@@ -227,15 +292,9 @@ export async function syncData() {
             newCount++
           }
           
-          // Process attachments if they exist
-          // Note: You'll need to adjust this based on the actual XML structure
-          if (contract.prilohy && Array.isArray(contract.prilohy.priloha)) {
-            for (const priloha of contract.prilohy.priloha) {
-              if (existingContract) {
-                // Here you would process attachments if needed
-                // This is just a placeholder for the actual implementation
-              }
-            }
+          // Log progress for every 100 contracts
+          if (processedCount % 100 === 0) {
+            console.log(`Processed ${processedCount} contracts (${newCount} new, ${updatedCount} updated)`)
           }
         } catch (itemError) {
           console.error(`Error processing contract:`, itemError)
@@ -273,10 +332,8 @@ export async function syncData() {
   return summary;
 }
 
-// Allow the script to be run directly
-const isRunningDirectly = require.main === module;
-
-if (isRunningDirectly) {
+// Run directly if this script is executed directly
+if (require.main === module) {
   syncData()
     .then(() => {
       console.log('Data sync completed successfully')
@@ -285,5 +342,8 @@ if (isRunningDirectly) {
     .catch(error => {
       console.error('Data sync failed:', error)
       process.exit(1)
+    })
+    .finally(async () => {
+      await prisma.$disconnect()
     })
 }
