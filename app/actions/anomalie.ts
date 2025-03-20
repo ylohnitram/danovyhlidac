@@ -1,10 +1,7 @@
 "use server"
 
-import { PrismaClient } from '@prisma/client'
 import { getCachedStats, cacheStats } from "@/lib/cache"
-
-// Server-side only PrismaClient instance
-const prisma = new PrismaClient()
+import { prisma, isDatabaseInitialized } from "@/lib/db-init"
 
 // Typy anomálií, které detekujeme
 const ANOMALY_TYPES = {
@@ -62,26 +59,25 @@ export async function getNeobvykleSmlouvy(limit = 5) {
       return { data: cachedData, cached: true };
     }
 
-    // Check if tables exist by running a simple query
-    try {
-      // This will throw an error if the table doesn't exist
-      await prisma.smlouva.findFirst();
-    } catch (schemaError) {
-      console.warn("Databázové tabulky ještě nejsou vytvořeny:", schemaError);
-      
-      // If we're in development mode, we'll provide some sample data
-      if (process.env.NODE_ENV === 'development') {
-        const mockData = getMockAnomalies();
-        return { data: mockData, cached: false, mock: true };
-      }
-      
-      // Return empty data in production rather than crashing
-      return { data: [], cached: false, dbNotReady: true };
+    // Check if database is initialized
+    const isDbInitialized = await isDatabaseInitialized();
+    
+    if (!isDbInitialized) {
+      console.warn("Databáze není plně inicializovaná - vracím mockovaná data");
+      const mockData = getMockAnomalies();
+      return { 
+        data: mockData, 
+        cached: false, 
+        mock: true, 
+        dbStatus: {
+          ready: false,
+          message: "Databázové tabulky nejsou vytvořeny. Je potřeba spustit migrace."
+        } 
+      };
     }
 
-    // V produkčním prostředí bez databáze vracíme alespoň mock data
     try {
-      // 1. Nová firma s velkou zakázkou
+      // 1. Nová firma s velkou zakázkou (bezpečně ošetřeno proti chybě, když tabulka neexistuje)
       const newCompanyBigContracts = await prisma.$queryRaw`
         SELECT 
           s.id,
@@ -152,17 +148,41 @@ export async function getNeobvykleSmlouvy(limit = 5) {
       // Uložit do cache
       await cacheStats("neobvykleSmlouvy", allAnomalies);
       
-      return { data: allAnomalies, cached: false };
+      return { 
+        data: allAnomalies, 
+        cached: false,
+        dbStatus: {
+          ready: true
+        } 
+      };
     } catch (dbError) {
       // Pokud nastane chyba při dotazech, vracíme mock data
       console.error("Chyba při dotazování do databáze:", dbError);
       const mockData = getMockAnomalies();
-      return { data: mockData, cached: false, mock: true, error: dbError.message };
+      return { 
+        data: mockData, 
+        cached: false, 
+        mock: true, 
+        error: dbError.message,
+        dbStatus: {
+          ready: false,
+          message: "Došlo k chybě při dotazování do databáze."
+        }
+      };
     }
   } catch (error) {
     console.error("Chyba při načítání neobvyklých zakázek:", error);
     // V případě jakékoli chyby vracíme mock data jako fallback
     const mockData = getMockAnomalies();
-    return { data: mockData, cached: false, mock: true, error: (error as Error).message };
+    return { 
+      data: mockData, 
+      cached: false, 
+      mock: true, 
+      error: (error as Error).message,
+      dbStatus: {
+        ready: false,
+        message: "Neočekávaná chyba při načítání dat."
+      }
+    };
   }
 }
