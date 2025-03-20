@@ -48,6 +48,7 @@
     "embla-carousel-react": "8.5.1",
     "framer-motion": "latest",
     "input-otp": "1.4.1",
+    "ioredis": "^5.6.0",
     "leaflet": "latest",
     "leaflet.markercluster": "latest",
     "lucide-react": "^0.454.0",
