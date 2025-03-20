@@ -1,4 +1,4 @@
-import { kv } from "@vercel/kv"
+import { kv } from "@/lib/redis"
 
 /**
  * Get the size of a Redis key in bytes
@@ -155,4 +155,3 @@ export async function recordCacheAccess(isHit: boolean): Promise<void> {
     console.error("Error recording cache access:", error)
   }
 }
-

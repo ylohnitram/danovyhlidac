@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { kv } from "@vercel/kv"
+import { kv } from "@/lib/redis"
 import { getCachedStats } from "@/lib/cache"
 
 // API endpoint to get detailed cache statistics
@@ -53,4 +53,3 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Internal server error", details: String(error) }, { status: 500 })
   }
 }
-

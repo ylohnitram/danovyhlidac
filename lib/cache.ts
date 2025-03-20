@@ -1,4 +1,4 @@
-import { kv } from "@vercel/kv"
+import { kv } from "@/lib/redis"
 import type { FetchSmlouvyParams, FetchSmlouvyResponse, Smlouva } from "@/app/actions/smlouvy"
 
 // Cache TTL (Time-To-Live) in seconds
@@ -220,4 +220,3 @@ export async function getCacheTTL(key: string): Promise<number> {
     return -1
   }
 }
-
