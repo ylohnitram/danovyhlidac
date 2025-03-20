@@ -1,6 +1,8 @@
 import { PrismaClient } from '@prisma/client'
 
-const prisma = new PrismaClient()
+// Ensure PrismaClient is only initialized on the server side
+const prisma = 
+  typeof window === 'undefined' ? new PrismaClient() : undefined as any
 
 /**
  * Checks if the database schema is set up correctly

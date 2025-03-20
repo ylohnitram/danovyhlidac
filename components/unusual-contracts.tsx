@@ -24,10 +24,9 @@ export default function UnusualContracts() {
     setError(null);
     
     try {
-      // Check database setup first - we don't attempt migrations anymore
-      // but still check if the database schema is available
-      const { ensureDatabaseSetup } = await import('@/lib/setup-db');
-      const dbSetupResult = await ensureDatabaseSetup();
+      // Check database setup using client-safe approach
+      const { checkDatabaseSetup } = await import('@/lib/db-check');
+      const dbSetupResult = await checkDatabaseSetup();
       
       if (!dbSetupResult.success) {
         setDatabaseStatus({
