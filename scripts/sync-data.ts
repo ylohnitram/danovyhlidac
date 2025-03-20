@@ -7,6 +7,19 @@ import * as os from 'os'
 
 const prisma = new PrismaClient()
 
+// Rozšířená definice typů pro contractData
+interface ContractData {
+  nazev: string;
+  castka: number;
+  kategorie: string;
+  datum: Date;
+  dodavatel: string;
+  zadavatel: string;
+  typ_rizeni: string;
+  lat?: number;
+  lng?: number;
+}
+
 // Function to download XML dump for a specific month
 async function downloadXmlDump(year: number, month: number): Promise<string> {
   // Format month as two digits
@@ -34,6 +47,11 @@ async function downloadXmlDump(year: number, month: number): Promise<string> {
     const fileStream = fs.createWriteStream(filePath)
     
     return new Promise((resolve, reject) => {
+      if (!response.body) {
+        reject(new Error('Response body is null'))
+        return
+      }
+      
       response.body.pipe(fileStream)
       response.body.on('error', (err) => {
         reject(err)
@@ -86,7 +104,7 @@ async function parseXmlDump(filePath: string) {
 }
 
 // Function to transform XML contract data to database format
-function transformContractData(contract: any) {
+function transformContractData(contract: any): ContractData {
   // Transform the XML data to match your database schema
   // You'll need to adjust this based on the actual XML structure
   return {
@@ -173,7 +191,7 @@ export async function syncData() {
           })
           
           // Transform the contract data
-          const contractData = transformContractData(contract)
+          const contractData: ContractData = transformContractData(contract)
           
           // Add geolocation if we don't have it
           if (!existingContract?.lat || !existingContract?.lng) {
