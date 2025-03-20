@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import React, { useState, useEffect } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -520,17 +520,21 @@ export default function TaxCalculator() {
                               defaultValue={field.value}
                               className="flex flex-col space-y-1"
                             >
-                              {PROPERTY_TYPES.map((type) => (
-                                <FormItem key={type.value} className="flex items-center space-x-3 space-y-0">
-                                  <FormControl>
-                                    <RadioGroupItem value={type.value} />
-                                  </FormControl>
-                                  <FormLabel className="font-normal flex items-center">
-                                    {React.createElement(type.icon, { className: "h-4 w-4 mr-2 text-blue-600" })}
-                                    {type.label}
-                                  </FormLabel>
-                                </FormItem>
-                              ))}
+                              {PROPERTY_TYPES.map((type) => {
+                                // Use the imported icons directly
+                                const IconComponent = type.icon;
+                                return (
+                                  <FormItem key={type.value} className="flex items-center space-x-3 space-y-0">
+                                    <FormControl>
+                                      <RadioGroupItem value={type.value} />
+                                    </FormControl>
+                                    <FormLabel className="font-normal flex items-center">
+                                      <IconComponent className="h-4 w-4 mr-2 text-blue-600" />
+                                      {type.label}
+                                    </FormLabel>
+                                  </FormItem>
+                                );
+                              })}
                             </RadioGroup>
                           </FormControl>
                           <FormMessage />
