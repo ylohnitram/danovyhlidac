@@ -402,7 +402,7 @@ function transformContractData(record: any): ContractData | null {
       name: string;  // Název strany
       authorityScore: number;  // Skóre pro roli "zadavatel"
       supplierScore: number;   // Skóre pro roli "dodavatel"
-      role?: string;  // Explicitní role, pokud je známa
+      role?: string | null;  // Explicitní role, pokud je známa - opraveno pro null
       isPublicEntity: boolean;  // Příznak, zda se jedná o veřejnou instituci
       explicitRole: boolean;    // Jestli byla role určena explicitně
     };
@@ -423,7 +423,7 @@ function transformContractData(record: any): ContractData | null {
         // Výchozí skóre
         let authScore = 0;
         let supplierScore = 0;
-        let explicitRole = null;
+        let explicitRole: string | null = null;
         let isExplicit = false;
         
         // Kontrola typu subjektu pro explicitní role
@@ -509,7 +509,7 @@ function transformContractData(record: any): ContractData | null {
         // Výchozí skóre
         let authScore = 0;
         let supplierScore = 0;
-        let explicitRole = null;
+        let explicitRole: string | null = null;
         let isExplicit = false;
         
         // Kontrola explicitních rolí
@@ -621,7 +621,8 @@ function transformContractData(record: any): ContractData | null {
             authorityScore: 50,
             supplierScore: 0,
             isPublicEntity: false,  // Nemáme dostatek informací, ale často to bývá fyzická osoba
-            explicitRole: false
+            explicitRole: false,
+            role: null // Přidáno explicitně null pro typovou kompatibilitu
           });
         }
       }
@@ -888,7 +889,7 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
     const contract = record.smlouva ? record.smlouva[0] : record;
     
     // Pomocná funkce pro kontrolu adresy
-    const extractAndCheckAddress = (addr: string | null): string | null => {
+    const extractAndCheckAddress = (addr: string | undefined | null): string | null => {
       if (!addr) return null;
       
       // Pokud adresa obsahuje nějaký typický prvek české adresy, je to pravděpodobně platná adresa
@@ -899,6 +900,9 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
       
       return hasAddressElements ? addr : null;
     };
+    
+    // Pomocná funkce pro konverzi undefined na null
+    const nullify = <T>(value: T | undefined): T | null => value === undefined ? null : value;
     
     // 1. Zkusit získat nejprve adresy specificky označené
     if (contract.mistoPlneni) {
@@ -953,7 +957,7 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
         
         // Získat název zadavatele
         if (mainAuthority.nazev) {
-          authority = extractFirstValue(mainAuthority.nazev) || null;
+          authority = nullify(extractFirstValue(mainAuthority.nazev));
           if (process.env.DEBUG) {
             console.log(`Nalezen zadavatel: "${authority}"`);
           }
@@ -1000,7 +1004,7 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
         
         // Získat název zadavatele, pokud ještě nemáme
         if (!authority && authParty.nazev) {
-          authority = extractFirstValue(authParty.nazev);
+          authority = nullify(extractFirstValue(authParty.nazev));
           if (process.env.DEBUG) {
             console.log(`Nalezen zadavatel z smluvniStrana: "${authority}"`);
           }
@@ -1029,7 +1033,7 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
           
           // Pokud jsme našli adresu nebo stále nemáme autoritu, použijeme této strany název
           if ((address && !authority) || (!authority && !address)) {
-            authority = extractFirstValue(party.nazev);
+            authority = nullify(extractFirstValue(party.nazev));
             if (process.env.DEBUG) {
               console.log(`Použit název strany jako záložní autorita: "${authority}"`);
             }
@@ -1043,7 +1047,7 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
     
     // 4. Zkusit získat zadavatele z schvalil pole
     if (!authority && contract.schvalil) {
-      authority = extractFirstValue(contract.schvalil);
+      authority = nullify(extractFirstValue(contract.schvalil));
       if (process.env.DEBUG) {
         console.log(`Použit schvalovatel jako záložní autorita: "${authority}"`);
       }
@@ -1058,7 +1062,7 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
     
     // 5. Poslední pokus - místo
     if (!address && contract.misto) {
-      address = extractFirstValue(contract.misto);
+      address = nullify(extractFirstValue(contract.misto));
       if (process.env.DEBUG) {
         console.log(`Použito obecné místo: "${address}"`);
       }
