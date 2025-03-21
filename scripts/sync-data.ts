@@ -33,6 +33,14 @@ interface ContractData {
   lng?: number;
 }
 
+// Define types for database query results
+interface SmlouvaWithTimestamp {
+  id: number;
+  updated_at: Date;
+  lat?: number;
+  lng?: number;
+}
+
 // Function to download XML dump for a specific month
 async function downloadXmlDump(year: number, month: number): Promise<string> {
   // Format month as two digits
@@ -374,8 +382,10 @@ export async function syncData() {
   let lastSync: Date;
   try {
     const lastSyncQuery = `SELECT updated_at FROM "${smlouvaTable}" ORDER BY updated_at DESC LIMIT 1`;
-    const result = await prisma.$queryRawUnsafe(lastSyncQuery);
-    lastSync = result[0]?.updated_at || new Date(0);
+    const result = await prisma.$queryRawUnsafe(lastSyncQuery) as SmlouvaWithTimestamp[];
+    
+    // Type assertion for result
+    lastSync = result.length > 0 && result[0]?.updated_at ? result[0].updated_at : new Date(0);
   } catch (error) {
     console.error('Error getting last sync date, using epoch:', error);
     lastSync = new Date(0);
@@ -435,7 +445,7 @@ export async function syncData() {
           }
           
           // Check if the contract already exists by ID or attributes
-          let existingContract;
+          let existingContract: SmlouvaWithTimestamp | null = null;
           
           if (contractId) {
             // First try to find by attributes to check if it exists
@@ -457,8 +467,8 @@ export async function syncData() {
             ];
             
             try {
-              const result = await prisma.$queryRawUnsafe(findQuery, ...params);
-              if (result && result.length > 0) {
+              const result = await prisma.$queryRawUnsafe(findQuery, ...params) as SmlouvaWithTimestamp[];
+              if (result && Array.isArray(result) && result.length > 0) {
                 existingContract = result[0];
               }
             } catch (findError) {
