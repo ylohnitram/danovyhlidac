@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
-import { execSync } from 'child_process';
 
 const prisma = new PrismaClient();
 
@@ -148,10 +147,15 @@ async function setupDatabase() {
 }
 
 export async function POST() {
-  // Disable in production unless explicitly enabled
+  // Improve message for production environment
   if (process.env.NODE_ENV === 'production' && !process.env.ENABLE_DB_DEBUG) {
     return NextResponse.json(
-      { error: 'Tento endpoint je v produkčním prostředí zakázán. Použijte proměnnou prostředí ENABLE_DB_DEBUG.' }, 
+      { 
+        error: 'Tento endpoint je v produkčním prostředí zakázán', 
+        message: 'Z bezpečnostních důvodů je správa databáze v produkčním prostředí zakázána. Pro povolení nastavte ENABLE_DB_DEBUG=true.',
+        success: false,
+        isProdLocked: true
+      }, 
       { status: 403 }
     );
   }

@@ -2,9 +2,14 @@ import { NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 
 export async function GET() {
-  // Disable in production unless explicitly enabled
+  // Improve message for production environment
   if (process.env.NODE_ENV === 'production' && !process.env.ENABLE_DB_DEBUG) {
-    return NextResponse.json({ error: 'Debug endpoint disabled in production' }, { status: 403 });
+    return NextResponse.json({ 
+      error: 'Debug endpoint disabled in production', 
+      status: 'forbidden',
+      message: 'Tento endpoint je v produkčním prostředí zakázán z bezpečnostních důvodů. Pro povolení nastavte ENABLE_DB_DEBUG=true.',
+      isProdLocked: true
+    }, { status: 403 });
   }
 
   const prisma = new PrismaClient();
