@@ -5,7 +5,14 @@ import xml2js from 'xml2js'
 import { PrismaClient } from '@prisma/client'
 import os from 'os'
 
-const prisma = new PrismaClient()
+// Vytvoření nové instance PrismaClient 
+// s doporučeným nastavením pro konzolové aplikace
+const prisma = new PrismaClient({
+  log: ['error', 'warn'],
+})
+
+console.log('Using PrismaClient with connection:', process.env.DATABASE_URL || 'default connection');
+
 const TEMP_DIR = '/tmp/smlouvy-dumps'
 
 // Create temp directory if it doesn't exist
@@ -306,19 +313,75 @@ async function geocodeAddress(address: string) {
   }
 }
 
+// Check if tables exist and get exact table names
+async function getExactTableNames(): Promise<Record<string, string>> {
+  try {
+    // Get all tables in the database
+    const tables = await prisma.$queryRaw`
+      SELECT tablename FROM pg_tables WHERE schemaname='public'
+    `;
+    
+    console.log('Available tables in the database:', tables);
+    
+    // Create map of base table names to actual table names
+    const tableMap: Record<string, string> = {};
+    
+    // Check for exact matches first
+    const standardNames = ['smlouva', 'dodavatel', 'dodatek', 'podnet'];
+    for (const name of standardNames) {
+      const exactMatch = (tables as any[]).find(t => t.tablename === name);
+      if (exactMatch) {
+        tableMap[name] = name;
+      }
+    }
+    
+    // Check for case-insensitive matches if exact matches weren't found
+    for (const name of standardNames) {
+      if (!tableMap[name]) {
+        const insensitiveMatch = (tables as any[]).find(
+          t => t.tablename.toLowerCase() === name.toLowerCase()
+        );
+        if (insensitiveMatch) {
+          tableMap[name] = insensitiveMatch.tablename;
+        }
+      }
+    }
+    
+    console.log('Table name mapping:', tableMap);
+    return tableMap;
+  } catch (error) {
+    console.error('Error getting exact table names:', error);
+    // Fall back to standard names if there's an error
+    return {
+      smlouva: 'smlouva',
+      dodavatel: 'dodavatel',
+      dodatek: 'dodatek',
+      podnet: 'podnet'
+    };
+  }
+}
+
 // Main synchronization function
 export async function syncData() {
   console.log('Starting data synchronization from open data dumps...')
   const startTime = Date.now()
   
-  // Get the date of the last update - using updated_at from a Smlouva record
-  const lastSync = await prisma.smlouva.findFirst({
-    orderBy: { updated_at: 'desc' },
-    select: { updated_at: true }
-  })
+  // Get exact table names
+  const tableNames = await getExactTableNames();
+  const smlouvaTable = tableNames.smlouva || 'smlouva';
   
-  const lastSyncDate = lastSync?.updated_at || new Date(0)
-  console.log(`Last sync date: ${lastSyncDate.toISOString()}`)
+  // Get the date of the last update - using updated_at from a Smlouva record
+  let lastSync: Date;
+  try {
+    const lastSyncQuery = `SELECT updated_at FROM "${smlouvaTable}" ORDER BY updated_at DESC LIMIT 1`;
+    const result = await prisma.$queryRawUnsafe(lastSyncQuery);
+    lastSync = result[0]?.updated_at || new Date(0);
+  } catch (error) {
+    console.error('Error getting last sync date, using epoch:', error);
+    lastSync = new Date(0);
+  }
+  
+  console.log(`Last sync date: ${lastSync.toISOString()}`)
   
   // Calculate the months to download
   // We'll download the last 3 months of data
@@ -375,19 +438,32 @@ export async function syncData() {
           let existingContract;
           
           if (contractId) {
-            // First try to find by external ID
-            existingContract = await prisma.smlouva.findFirst({
-              where: { 
-                nazev: contractData.nazev,
-                datum: {
-                  // Use approximate date matching due to timezone differences
-                  gte: new Date(contractData.datum.getTime() - 24 * 60 * 60 * 1000),
-                  lte: new Date(contractData.datum.getTime() + 24 * 60 * 60 * 1000),
-                },
-                dodavatel: contractData.dodavatel,
-                zadavatel: contractData.zadavatel
+            // First try to find by attributes to check if it exists
+            const findQuery = `
+              SELECT id, lat, lng FROM "${smlouvaTable}" 
+              WHERE nazev = $1 
+                AND zadavatel = $2 
+                AND dodavatel = $3 
+                AND datum BETWEEN $4 AND $5
+              LIMIT 1
+            `;
+            
+            const params = [
+              contractData.nazev,
+              contractData.zadavatel,
+              contractData.dodavatel,
+              new Date(contractData.datum.getTime() - 24 * 60 * 60 * 1000),
+              new Date(contractData.datum.getTime() + 24 * 60 * 60 * 1000)
+            ];
+            
+            try {
+              const result = await prisma.$queryRawUnsafe(findQuery, ...params);
+              if (result && result.length > 0) {
+                existingContract = result[0];
               }
-            });
+            } catch (findError) {
+              console.error('Error finding existing contract:', findError);
+            }
           }
           
           // Add geolocation if we don't have it
@@ -420,15 +496,61 @@ export async function syncData() {
             }
           }
           
-          // Create or update the contract
+          // Create or update the contract using raw queries
           if (existingContract) {
-            await prisma.smlouva.update({
-              where: { id: existingContract.id },
-              data: contractData
-            });
+            const updateQuery = `
+              UPDATE "${smlouvaTable}" SET
+                nazev = $1,
+                castka = $2,
+                kategorie = $3,
+                datum = $4,
+                dodavatel = $5,
+                zadavatel = $6,
+                typ_rizeni = $7,
+                lat = $8,
+                lng = $9,
+                updated_at = CURRENT_TIMESTAMP
+              WHERE id = $10
+            `;
+            
+            const updateParams = [
+              contractData.nazev,
+              contractData.castka,
+              contractData.kategorie,
+              contractData.datum,
+              contractData.dodavatel,
+              contractData.zadavatel,
+              contractData.typ_rizeni,
+              contractData.lat || null,
+              contractData.lng || null,
+              existingContract.id
+            ];
+            
+            await prisma.$executeRawUnsafe(updateQuery, ...updateParams);
             updatedCount++;
           } else {
-            await prisma.smlouva.create({ data: contractData });
+            const insertQuery = `
+              INSERT INTO "${smlouvaTable}" (
+                nazev, castka, kategorie, datum, dodavatel, zadavatel, 
+                typ_rizeni, lat, lng, created_at, updated_at
+              ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+              )
+            `;
+            
+            const insertParams = [
+              contractData.nazev,
+              contractData.castka,
+              contractData.kategorie,
+              contractData.datum,
+              contractData.dodavatel,
+              contractData.zadavatel,
+              contractData.typ_rizeni,
+              contractData.lat || null,
+              contractData.lng || null
+            ];
+            
+            await prisma.$executeRawUnsafe(insertQuery, ...insertParams);
             newCount++;
           }
           
