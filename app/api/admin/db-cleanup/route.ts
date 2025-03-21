@@ -22,23 +22,22 @@ async function getAllTables() {
 }
 
 /**
- * Gets exact table name with case sensitivity preserved
+ * Check if a table exists (exact match)
  */
-async function getExactTableName(tableName: string): Promise<string | null> {
+async function tableExists(tableName: string): Promise<boolean> {
   try {
     const result = await prisma.$queryRaw`
-      SELECT tablename FROM pg_tables 
-      WHERE schemaname='public' 
-      AND LOWER(tablename)=LOWER(${tableName})
+      SELECT EXISTS (
+        SELECT 1 FROM pg_tables 
+        WHERE schemaname = 'public' 
+        AND tablename = ${tableName}
+      ) as exists
     `;
     
-    if (Array.isArray(result) && result.length > 0) {
-      return result[0].tablename;
-    }
-    return null;
+    return result[0]?.exists === true;
   } catch (error) {
-    console.error(`Error getting exact table name for ${tableName}:`, error);
-    return null;
+    console.error(`Error checking table existence for ${tableName}:`, error);
+    return false;
   }
 }
 
@@ -47,29 +46,51 @@ async function getExactTableName(tableName: string): Promise<string | null> {
  */
 async function dropTable(tableName: string) {
   try {
-    // Drop any foreign key constraints first
-    const dropConstraintsQuery = `
-      DO $$ 
-      DECLARE
-        r RECORD;
-      BEGIN
-        FOR r IN (
-          SELECT conname, conrelid::regclass AS table_name
-          FROM pg_constraint
-          WHERE confrelid = '${tableName}'::regclass
-        ) LOOP
-          EXECUTE 'ALTER TABLE ' || r.table_name || ' DROP CONSTRAINT IF EXISTS ' || r.conname;
-        END LOOP;
-      END $$;
-    `;
-    
-    await prisma.$executeRawUnsafe(dropConstraintsQuery);
-    
-    // Now drop the table
+    // First check if the table actually exists
+    if (!(await tableExists(tableName))) {
+      return { 
+        success: false, 
+        table: tableName,
+        error: `Tabulka "${tableName}" nebyla nalezena`
+      };
+    }
+
+    // Use this approach to drop foreign key constraints
+    try {
+      // Get all foreign key constraints referencing this table
+      const constraints = await prisma.$queryRaw`
+        SELECT con.conname, rel.relname as table_name 
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_class rel2 ON rel2.oid = con.confrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE rel2.relname = ${tableName}
+        AND nsp.nspname = 'public'
+        AND con.contype = 'f'
+      `;
+
+      // Drop each constraint
+      for (const constraint of constraints as any[]) {
+        const dropConstraintQuery = `
+          ALTER TABLE "${constraint.table_name}" 
+          DROP CONSTRAINT IF EXISTS "${constraint.conname}"
+        `;
+        await prisma.$executeRawUnsafe(dropConstraintQuery);
+      }
+    } catch (constraintError) {
+      console.warn(`Warning while dropping constraints for ${tableName}:`, constraintError);
+      // Continue anyway to try dropping the table
+    }
+
+    // Now drop the table with proper quoting
     const dropTableQuery = `DROP TABLE IF EXISTS "${tableName}" CASCADE`;
     await prisma.$executeRawUnsafe(dropTableQuery);
     
-    return { success: true, table: tableName, message: "Tabulka úspěšně odstraněna" };
+    return { 
+      success: true, 
+      table: tableName, 
+      message: "Tabulka úspěšně odstraněna" 
+    };
   } catch (error) {
     console.error(`Error dropping table ${tableName}:`, error);
     return { 
@@ -202,7 +223,7 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
     
-    // Drop each table
+    // Drop each table and collect results
     const results = [];
     for (const tableName of validTablesToRemove) {
       const result = await dropTable(tableName);
@@ -210,7 +231,7 @@ export async function POST(request: Request) {
     }
     
     return NextResponse.json({
-      success: results.every((r: any) => r.success),
+      success: results.some((r: any) => r.success),
       results
     });
   } catch (error) {
