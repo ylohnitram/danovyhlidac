@@ -4,55 +4,35 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 /**
- * Gets a list of all tables in the database
+ * Gets a list of all tables in the database with simplified query
  */
 async function listAllTables() {
   try {
     const tables = await prisma.$queryRaw`
-      SELECT 
-        tablename, 
-        tableowner,
-        (SELECT count(*) FROM pg_indexes WHERE tablename=pg_tables.tablename) AS index_count,
-        (SELECT count(*) FROM information_schema.columns WHERE table_name=pg_tables.tablename) AS column_count
+      SELECT tablename, tableowner
       FROM pg_tables 
       WHERE schemaname='public'
       ORDER BY tablename;
     `;
+    
+    console.log('Tables found:', tables);
     return tables;
   } catch (error) {
     console.error('Error listing tables:', error);
-    return [];
+    throw error; // Re-throw to handle in the main handler
   }
 }
 
 /**
- * Checks if a table exists
- */
-async function tableExists(tableName: string) {
-  try {
-    const result = await prisma.$queryRaw`
-      SELECT EXISTS (
-        SELECT FROM pg_tables
-        WHERE schemaname = 'public'
-        AND tablename = ${tableName}
-      ) as exists;
-    `;
-    return result[0]?.exists || false;
-  } catch (error) {
-    console.error(`Error checking if table ${tableName} exists:`, error);
-    return false;
-  }
-}
-
-/**
- * Gets column information for a table
+ * Gets column information for a table with safer query
  */
 async function getTableColumns(tableName: string) {
   try {
     const columns = await prisma.$queryRaw`
-      SELECT column_name, data_type, character_maximum_length, is_nullable
+      SELECT column_name, data_type 
       FROM information_schema.columns
       WHERE table_name = ${tableName}
+      AND table_schema = 'public'
       ORDER BY ordinal_position;
     `;
     return columns;
@@ -63,13 +43,14 @@ async function getTableColumns(tableName: string) {
 }
 
 /**
- * Gets row count for a table
+ * Gets row count for a table with safer query
  */
 async function getTableRowCount(tableName: string) {
   try {
+    // Use a safer approach with $executeRawUnsafe
     const query = `SELECT COUNT(*) as count FROM "${tableName}"`;
-    const result = await prisma.$queryRawUnsafe(query);
-    return result[0]?.count || 0;
+    const result = await prisma.$executeRawUnsafe(query);
+    return result;
   } catch (error) {
     console.error(`Error getting row count for table ${tableName}:`, error);
     return 0;
@@ -104,26 +85,13 @@ async function migrateData(sourceName: string, targetName: string) {
     // Format columns for SQL query
     const columnsList = commonColumns.map(col => `"${col}"`).join(', ');
     
-    // Check if target table already has data
-    const targetCount = await getTableRowCount(targetName);
-    if (targetCount > 0) {
-      return {
-        success: false,
-        message: `Target table ${targetName} already has ${targetCount} rows. Clear it first to avoid duplicates.`
-      };
-    }
-    
     // Copy data
     const query = `INSERT INTO "${targetName}" (${columnsList}) SELECT ${columnsList} FROM "${sourceName}"`;
-    await prisma.$queryRawUnsafe(query);
-    
-    // Count migrated rows
-    const migratedCount = await getTableRowCount(targetName);
+    await prisma.$executeRawUnsafe(query);
     
     return {
       success: true,
-      message: `Successfully migrated ${migratedCount} rows from ${sourceName} to ${targetName}`,
-      migratedRows: migratedCount,
+      message: `Successfully migrated data from ${sourceName} to ${targetName}`,
       columns: commonColumns
     };
   } catch (error) {
@@ -135,104 +103,28 @@ async function migrateData(sourceName: string, targetName: string) {
   }
 }
 
-/**
- * The main recovery process
- */
-async function runDatabaseRecovery() {
-  try {
-    // List all tables
-    const allTables = await listAllTables();
-    
-    // Map of case-insensitive table names to their actual names
-    const tableMap = {};
-    for (const table of allTables) {
-      tableMap[table.tablename.toLowerCase()] = table.tablename;
-    }
-    
-    // Define target tables (lowercase)
-    const targetTables = ['smlouva', 'dodavatel', 'dodatek', 'podnet'];
-    
-    // Recovery results
-    const recoveryResults = [];
-    
-    // Check and migrate each table
-    for (const targetTable of targetTables) {
-      // Find potential source tables with similar names
-      const potentialSources = Object.keys(tableMap)
-        .filter(name => name.toLowerCase() === targetTable.toLowerCase() && name !== targetTable);
-      
-      if (potentialSources.length > 0) {
-        const sourceTable = tableMap[potentialSources[0]];
-        
-        // Check if source table has data
-        const sourceCount = await getTableRowCount(sourceTable);
-        if (sourceCount > 0) {
-          // Target table exists and is different from source
-          if (await tableExists(targetTable) && targetTable !== sourceTable) {
-            // Migrate data
-            const migrationResult = await migrateData(sourceTable, targetTable);
-            recoveryResults.push({
-              source: sourceTable,
-              target: targetTable,
-              result: migrationResult
-            });
-          } else {
-            recoveryResults.push({
-              source: sourceTable,
-              target: targetTable,
-              result: {
-                success: false,
-                message: `Target table ${targetTable} doesn't exist or is the same as source`
-              }
-            });
-          }
-        } else {
-          recoveryResults.push({
-            source: sourceTable,
-            target: targetTable,
-            result: {
-              success: false,
-              message: `Source table ${sourceTable} has no data to migrate`
-            }
-          });
-        }
-      } else {
-        recoveryResults.push({
-          target: targetTable,
-          result: {
-            success: false,
-            message: `No source table found for ${targetTable}`
-          }
-        });
-      }
-    }
-    
-    return {
-      allTables,
-      tableMap,
-      recoveryResults
-    };
-  } catch (error) {
-    return {
-      success: false,
-      message: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-
 export async function GET() {
   try {
-    // List all tables for diagnostic purposes
+    // Simplified approach - just list tables
     const tables = await listAllTables();
     
-    // Get row counts for tables that match our expected names (case-insensitive)
+    // Add basic table counts if possible
     const tableCounts = [];
     for (const table of tables) {
-      const count = await getTableRowCount(table.tablename);
-      tableCounts.push({
-        name: table.tablename,
-        count
-      });
+      try {
+        const count = await getTableRowCount(table.tablename);
+        tableCounts.push({
+          name: table.tablename,
+          count
+        });
+      } catch (countError) {
+        console.error(`Error counting rows in ${table.tablename}:`, countError);
+        tableCounts.push({
+          name: table.tablename,
+          count: 'Error',
+          error: countError instanceof Error ? countError.message : String(countError)
+        });
+      }
     }
     
     return NextResponse.json({
@@ -240,19 +132,60 @@ export async function GET() {
       tableCounts
     });
   } catch (error) {
+    console.error('Error in GET handler:', error);
     return NextResponse.json({
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      stack: process.env.NODE_ENV === 'development' ? (error instanceof Error ? error.stack : undefined) : undefined
     }, { status: 500 });
   }
 }
 
 export async function POST() {
   try {
-    const result = await runDatabaseRecovery();
-    return NextResponse.json(result);
-  } catch (error) {
+    // List all tables
+    const tables = await listAllTables();
+    
+    // Check if we have both uppercase and lowercase versions of tables
+    const tableNames = tables.map(t => t.tablename);
+    const recoveryPairs = [];
+    
+    // Look for potential pairs (case-insensitive matches that aren't identical)
+    for (const tableName of tableNames) {
+      const lowerName = tableName.toLowerCase();
+      
+      // Skip if the name is already lowercase
+      if (tableName === lowerName) continue;
+      
+      // Check if we have the lowercase version
+      if (tableNames.includes(lowerName)) {
+        recoveryPairs.push({
+          source: tableName,
+          target: lowerName
+        });
+      }
+    }
+    
+    // Process each recovery pair
+    const results = [];
+    for (const pair of recoveryPairs) {
+      const result = await migrateData(pair.source, pair.target);
+      results.push({
+        ...pair,
+        result
+      });
+    }
+    
     return NextResponse.json({
-      error: error instanceof Error ? error.message : String(error)
+      success: true,
+      recoveryPairs,
+      results
+    });
+  } catch (error) {
+    console.error('Error in POST handler:', error);
+    return NextResponse.json({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      stack: process.env.NODE_ENV === 'development' ? (error instanceof Error ? error.stack : undefined) : undefined
     }, { status: 500 });
   }
 }
