@@ -1,15 +1,112 @@
+"use client"
+
+import { useState } from "react"
 import { Metadata } from "next"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { AlertTriangle, ExternalLink } from "lucide-react"
+import { AlertTriangle, ExternalLink, Loader2, CheckCircle, XCircle } from "lucide-react"
 
-export const metadata: Metadata = {
-  title: "Database Setup | MůjDaňovýHlídač Admin",
-  description: "Správa databáze pro aplikaci MůjDaňovýHlídač",
+// Nemůžeme importovat Metadata v client komponentě, takže ji definujeme v page.js/page.tsx souboru
+// export const metadata: Metadata = {
+//   title: "Database Setup | MůjDaňovýHlídač Admin",
+//   description: "Správa databáze pro aplikaci MůjDaňovýHlídač",
+// }
+
+async function checkDatabaseStatus() {
+  try {
+    const response = await fetch('/api/debug/db-status', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API responded with status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error checking database status:', error);
+    return {
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Unknown error',
+      connected: false,
+      hasSchema: false
+    };
+  }
+}
+
+async function initializeDatabase() {
+  try {
+    // Volání na API endpoint pro setup databáze
+    const response = await fetch('/api/debug/db-setup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API responded with status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error initializing database:', error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
 }
 
 export default function DatabaseSetupPage() {
+  const [loading, setLoading] = useState<boolean>(false);
+  const [statusLoading, setStatusLoading] = useState<boolean>(false);
+  const [statusResult, setStatusResult] = useState<any>(null);
+  const [setupResult, setSetupResult] = useState<any>(null);
+
+  const handleCheckStatus = async () => {
+    setStatusLoading(true);
+    setStatusResult(null);
+    
+    try {
+      const result = await checkDatabaseStatus();
+      setStatusResult(result);
+    } catch (error) {
+      setStatusResult({
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    } finally {
+      setStatusLoading(false);
+    }
+  };
+
+  const handleInitializeDb = async () => {
+    setLoading(true);
+    setSetupResult(null);
+    
+    try {
+      const result = await initializeDatabase();
+      setSetupResult(result);
+      
+      // Pokud inicializace proběhla úspěšně, aktualizujeme i status
+      if (result.success) {
+        await handleCheckStatus();
+      }
+    } catch (error) {
+      setSetupResult({
+        success: false,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <main className="container mx-auto px-4 py-8">
       <div className="space-y-6">
@@ -23,6 +120,36 @@ export default function DatabaseSetupPage() {
             v databázi nebyla nalezena. Je potřeba provést inicializaci databáze pomocí migrací.
           </AlertDescription>
         </Alert>
+        
+        {statusResult?.status === 'success' && statusResult?.counts && (
+          <Alert variant="success" className="bg-green-50 border-green-200">
+            <CheckCircle className="h-4 w-4 text-green-600" />
+            <AlertTitle className="text-green-800">Databáze je inicializována</AlertTitle>
+            <AlertDescription className="text-green-700">
+              Databáze obsahuje {statusResult.counts.total} záznamů. Vše je připraveno k použití.
+            </AlertDescription>
+          </Alert>
+        )}
+        
+        {setupResult?.success && (
+          <Alert variant="success" className="bg-green-50 border-green-200">
+            <CheckCircle className="h-4 w-4 text-green-600" />
+            <AlertTitle className="text-green-800">Inicializace úspěšná</AlertTitle>
+            <AlertDescription className="text-green-700">
+              {setupResult.message}
+            </AlertDescription>
+          </Alert>
+        )}
+        
+        {(setupResult && !setupResult.success) && (
+          <Alert variant="destructive">
+            <XCircle className="h-4 w-4" />
+            <AlertTitle>Chyba při inicializaci</AlertTitle>
+            <AlertDescription>
+              {setupResult.message || 'Došlo k neznámé chybě při inicializaci databáze.'}
+            </AlertDescription>
+          </Alert>
+        )}
         
         <div className="grid md:grid-cols-2 gap-6">
           <Card>
@@ -38,11 +165,45 @@ export default function DatabaseSetupPage() {
                 k databázi a existenci požadovaných tabulek.
               </p>
               
-              <form action="/api/admin/db-check" className="space-y-4">
-                <Button type="submit">
-                  Zkontrolovat stav databáze
-                </Button>
-              </form>
+              {statusResult && !statusLoading && (
+                <div className="mb-4 p-4 bg-gray-50 rounded-md">
+                  <h3 className="font-medium mb-2">Výsledek kontroly:</h3>
+                  <div className="space-y-2 text-sm">
+                    <p>
+                      <span className="font-medium">Status:</span> {statusResult.status === 'success' ? 'Úspěch' : 'Chyba'}
+                    </p>
+                    {statusResult.connected !== undefined && (
+                      <p>
+                        <span className="font-medium">Připojení k databázi:</span> {statusResult.connected ? 'Úspěšné' : 'Neúspěšné'}
+                      </p>
+                    )}
+                    {statusResult.hasSchema !== undefined && (
+                      <p>
+                        <span className="font-medium">Databázové schema:</span> {statusResult.hasSchema ? 'Existuje' : 'Chybí'}
+                      </p>
+                    )}
+                    {statusResult.tables && (
+                      <p>
+                        <span className="font-medium">Nalezené tabulky:</span> {statusResult.tables.length > 0 ? statusResult.tables.join(', ') : 'Žádné'}
+                      </p>
+                    )}
+                    {statusResult.message && (
+                      <p className="text-gray-600">{statusResult.message}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              <Button onClick={handleCheckStatus} disabled={statusLoading}>
+                {statusLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Kontrola probíhá...
+                  </>
+                ) : (
+                  'Zkontrolovat stav databáze'
+                )}
+              </Button>
             </CardContent>
           </Card>
           
@@ -59,11 +220,16 @@ export default function DatabaseSetupPage() {
                 všech migrací a vytvoření potřebných tabulek.
               </p>
               
-              <form action="/api/admin/db-setup" className="space-y-4">
-                <Button type="submit" variant="destructive">
-                  Inicializovat databázi
-                </Button>
-              </form>
+              <Button onClick={handleInitializeDb} variant="destructive" disabled={loading}>
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Inicializace probíhá...
+                  </>
+                ) : (
+                  'Inicializovat databázi'
+                )}
+              </Button>
               
               <p className="text-sm text-muted-foreground mt-4">
                 Tato akce je bezpečná, pokud databáze už existuje, nebudou provedeny žádné změny.
