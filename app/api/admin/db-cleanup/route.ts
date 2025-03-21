@@ -22,6 +22,27 @@ async function getAllTables() {
 }
 
 /**
+ * Gets exact table name with case sensitivity preserved
+ */
+async function getExactTableName(tableName: string): Promise<string | null> {
+  try {
+    const result = await prisma.$queryRaw`
+      SELECT tablename FROM pg_tables 
+      WHERE schemaname='public' 
+      AND LOWER(tablename)=LOWER(${tableName})
+    `;
+    
+    if (Array.isArray(result) && result.length > 0) {
+      return result[0].tablename;
+    }
+    return null;
+  } catch (error) {
+    console.error(`Error getting exact table name for ${tableName}:`, error);
+    return null;
+  }
+}
+
+/**
  * Drops a table from the database
  */
 async function dropTable(tableName: string) {
@@ -48,28 +69,93 @@ async function dropTable(tableName: string) {
     const dropTableQuery = `DROP TABLE IF EXISTS "${tableName}" CASCADE`;
     await prisma.$executeRawUnsafe(dropTableQuery);
     
-    return { success: true, tableName };
+    return { success: true, table: tableName, message: "Tabulka úspěšně odstraněna" };
   } catch (error) {
     console.error(`Error dropping table ${tableName}:`, error);
     return { 
       success: false, 
-      tableName,
+      table: tableName,
       error: error instanceof Error ? error.message : String(error)
     };
   }
 }
 
 /**
- * Clean up database by removing unwanted tables
+ * Analyzes tables and finds ones with case inconsistencies
  */
-export async function GET(request: Request) {
+async function analyzeTables() {
   try {
-    // Get all tables in the database
+    // Get all tables
     const allTables = await getAllTables();
+    const tableNames = allTables.map((t: any) => t.tablename);
     
-    // Return list of tables
+    // Standard table names (lowercase)
+    const standardTables = ['smlouva', 'dodavatel', 'dodatek', 'podnet', '_prisma_migrations'];
+    
+    // Tables to remove - case inconsistencies
+    const tablesToRemove = [];
+    
+    // Check each table for case inconsistencies
+    for (const tableName of tableNames) {
+      const lowerName = tableName.toLowerCase();
+      
+      // If it's a standard table name but with different case
+      if (standardTables.includes(lowerName) && tableName !== lowerName) {
+        tablesToRemove.push({
+          name: tableName,
+          reason: `Nekonzistentní velikost písmen (${lowerName} vs ${tableName})`,
+          original: lowerName
+        });
+      }
+    }
+    
+    // Unknown tables - not in standard list and not prisma-related
+    const unknownTables = tableNames
+      .filter(name => {
+        const lowerName = name.toLowerCase();
+        // Not a standard table (with any case)
+        return !standardTables.includes(lowerName) &&
+               // Not a Prisma managed table
+               !name.startsWith('_prisma_') &&
+               // Not a PostgreSQL system table
+               !name.startsWith('pg_') &&
+               !name.startsWith('sql_');
+      })
+      .map(name => ({
+        name,
+        reason: 'Neznámá tabulka, není v seznamu standardních tabulek'
+      }));
+    
+    // Tables safe to keep - case correct or system tables
+    const safeToKeep = tableNames
+      .filter(name => {
+        const lowerName = name.toLowerCase();
+        // Standard table with correct case
+        return (standardTables.includes(lowerName) && name === lowerName) ||
+               // Prisma system table
+               name.startsWith('_prisma_');
+      })
+      .map(name => ({
+        name
+      }));
+    
+    return {
+      tablesToRemove,
+      unknownTables,
+      safeToKeep
+    };
+  } catch (error) {
+    console.error("Error analyzing tables:", error);
+    throw error;
+  }
+}
+
+export async function GET() {
+  try {
+    const tablesInfo = await analyzeTables();
+    
     return NextResponse.json({
-      tables: allTables
+      tables: tablesInfo
     });
   } catch (error) {
     console.error("Error in GET handler:", error);
@@ -81,78 +167,51 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    // Get the mode from the request
     const url = new URL(request.url);
-    const mode = url.searchParams.get('mode') || 'list';
+    const includeUnknown = url.searchParams.get('includeUnknown') === 'true';
     
-    // Get all tables
-    const allTables = await getAllTables();
+    // Parse the request body to get the tables to remove
+    const data = await request.json();
+    const tablesToRemove = data.tables || [];
     
-    if (mode === 'list') {
-      // Just return the list of tables
+    if (tablesToRemove.length === 0) {
       return NextResponse.json({
-        tables: allTables
-      });
+        success: false,
+        message: "Nejsou vybrány žádné tabulky k odstranění"
+      }, { status: 400 });
     }
     
-    // The tables we want to keep (lowercase)
-    const validTables = ['smlouva', 'dodavatel', 'dodatek', 'podnet', '_prisma_migrations'];
+    // Analyze tables to confirm which ones should be removed
+    const analysis = await analyzeTables();
     
-    // Find tables to delete
-    const tablesToDelete = allTables.filter((table: any) => {
-      // Keep tables that are exactly in our valid list
-      if (validTables.includes(table.tablename)) {
-        return false;
-      }
+    // Validate the tables to remove
+    const validTablesToRemove = tablesToRemove.filter((table: string) => {
+      // Tables marked for removal are always valid
+      const isMarkedForRemoval = analysis.tablesToRemove.some(t => t.name === table);
       
-      // Check for tables with the same name but different case
-      const lowerName = table.tablename.toLowerCase();
-      if (validTables.includes(lowerName) && lowerName !== table.tablename) {
-        return true;
-      }
+      // Unknown tables are valid only if includeUnknown is true
+      const isUnknown = analysis.unknownTables.some(t => t.name === table);
       
-      // Keep system tables
-      if (table.tablename.startsWith('pg_') || 
-          table.tablename.startsWith('sql_') || 
-          table.tablename.startsWith('information_schema')) {
-        return false;
-      }
-      
-      // For 'cleanup-all' mode, delete all non-valid tables
-      // For 'cleanup-case' mode, only delete tables with case issues
-      if (mode === 'cleanup-all') {
-        return true;
-      } else if (mode === 'cleanup-case') {
-        // Only delete tables that have same-named lowercase versions
-        return validTables.includes(table.tablename.toLowerCase());
-      }
-      
-      return false;
+      return isMarkedForRemoval || (includeUnknown && isUnknown);
     });
     
-    // If there are no tables to delete, return early
-    if (tablesToDelete.length === 0) {
+    if (validTablesToRemove.length === 0) {
       return NextResponse.json({
-        success: true,
-        message: "No tables to delete",
-        tables: allTables
-      });
+        success: false,
+        message: "Žádná z vybraných tabulek není platná pro odstranění"
+      }, { status: 400 });
     }
     
     // Drop each table
     const results = [];
-    for (const table of tablesToDelete) {
-      const result = await dropTable(table.tablename);
+    for (const tableName of validTablesToRemove) {
+      const result = await dropTable(tableName);
       results.push(result);
     }
     
-    // Get updated list of tables
-    const updatedTables = await getAllTables();
-    
     return NextResponse.json({
       success: results.every((r: any) => r.success),
-      deletedTables: results,
-      remainingTables: updatedTables
+      results
     });
   } catch (error) {
     console.error("Error in POST handler:", error);

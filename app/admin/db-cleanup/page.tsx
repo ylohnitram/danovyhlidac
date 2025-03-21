@@ -29,9 +29,20 @@ import {
   DialogTrigger 
 } from "@/components/ui/dialog"
 
+// Define a more specific type for tables info
+interface TablesInfo {
+  tablesToRemove?: Array<{name: string, reason: string, original: string}>;
+  unknownTables?: Array<{name: string, reason: string}>;
+  safeToKeep?: Array<{name: string}>;
+}
+
 export default function DatabaseCleanupPage() {
   const [loading, setLoading] = useState(true)
-  const [tablesInfo, setTablesInfo] = useState<any>(null)
+  const [tablesInfo, setTablesInfo] = useState<TablesInfo>({
+    tablesToRemove: [],
+    unknownTables: [],
+    safeToKeep: []
+  })
   const [error, setError] = useState<string | null>(null)
   const [removingTables, setRemovingTables] = useState(false)
   const [removeResult, setRemoveResult] = useState<any>(null)
@@ -39,8 +50,8 @@ export default function DatabaseCleanupPage() {
   const [selectedTables, setSelectedTables] = useState<string[]>([])
   const [showDialog, setShowDialog] = useState(false)
 
-  // Load tables information
-  const fetchTablesInfo = async () => {
+  // Load database information
+  const fetchDatabaseInfo = async () => {
     setLoading(true)
     setError(null)
 
@@ -55,7 +66,11 @@ export default function DatabaseCleanupPage() {
       const data = await response.json()
       console.log("API response:", data)
       
-      setTablesInfo(data.tables)
+      setTablesInfo(data.tables || {
+        tablesToRemove: [],
+        unknownTables: [],
+        safeToKeep: []
+      })
       
       // Default selected tables are those marked for removal
       if (data.tables?.tablesToRemove) {
@@ -71,7 +86,7 @@ export default function DatabaseCleanupPage() {
 
   // Load data on mount
   useEffect(() => {
-    fetchTablesInfo()
+    fetchDatabaseInfo()
   }, [])
 
   // Handle table removal
@@ -114,7 +129,7 @@ export default function DatabaseCleanupPage() {
       setRemoveResult(result)
 
       // Reload tables info after removal
-      fetchTablesInfo()
+      fetchDatabaseInfo()
     } catch (err) {
       console.error("Error removing tables:", err)
       setError(err instanceof Error ? err.message : String(err))
@@ -134,6 +149,8 @@ export default function DatabaseCleanupPage() {
 
   // Toggle all tables in a category
   const toggleAllInCategory = (tables: any[], selected: boolean) => {
+    if (!tables || tables.length === 0) return;
+    
     const tableNames = tables.map(t => t.name)
     
     if (selected) {
@@ -147,12 +164,16 @@ export default function DatabaseCleanupPage() {
 
   // Check if all tables in a category are selected
   const areAllSelected = (tables: any[]) => {
+    if (!tables || tables.length === 0) return false;
+    
     const tableNames = tables.map(t => t.name)
     return tableNames.every(name => selectedTables.includes(name))
   }
 
   // Check if some tables in a category are selected
   const areSomeSelected = (tables: any[]) => {
+    if (!tables || tables.length === 0) return false;
+    
     const tableNames = tables.map(t => t.name)
     return tableNames.some(name => selectedTables.includes(name)) && !areAllSelected(tables)
   }
@@ -197,7 +218,7 @@ export default function DatabaseCleanupPage() {
         )}
 
         <div className="flex justify-between items-center">
-          <Button variant="outline" onClick={fetchTablesInfo} disabled={loading}>
+          <Button variant="outline" onClick={fetchDatabaseInfo} disabled={loading}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Obnovit
           </Button>
@@ -232,19 +253,19 @@ export default function DatabaseCleanupPage() {
                   <div className="flex items-center mb-2">
                     <Checkbox 
                       id="select-all-to-remove"
-                      checked={tablesInfo?.tablesToRemove.length > 0 && areAllSelected(tablesInfo.tablesToRemove)}
-                      onCheckedChange={(checked) => toggleAllInCategory(tablesInfo?.tablesToRemove || [], !!checked)}
+                      checked={tablesInfo.tablesToRemove && tablesInfo.tablesToRemove.length > 0 && areAllSelected(tablesInfo.tablesToRemove)}
+                      onCheckedChange={(checked) => toggleAllInCategory(tablesInfo.tablesToRemove || [], !!checked)}
                       className="mr-2"
                     />
                     <Label htmlFor="select-all-to-remove" className="font-medium">
                       Duplicitní tabulky 
                       <Badge variant="destructive" className="ml-2">
-                        {tablesInfo?.tablesToRemove.length || 0}
+                        {tablesInfo.tablesToRemove?.length || 0}
                       </Badge>
                     </Label>
                   </div>
                   
-                  {tablesInfo?.tablesToRemove && tablesInfo.tablesToRemove.length > 0 ? (
+                  {tablesInfo.tablesToRemove && tablesInfo.tablesToRemove.length > 0 ? (
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -284,7 +305,7 @@ export default function DatabaseCleanupPage() {
                 </div>
                 
                 {/* Unknown tables section */}
-                {includeUnknown && tablesInfo?.unknownTables && tablesInfo.unknownTables.length > 0 && (
+                {includeUnknown && tablesInfo.unknownTables && tablesInfo.unknownTables.length > 0 && (
                   <div>
                     <div className="flex items-center mb-2">
                       <Checkbox 
@@ -331,7 +352,7 @@ export default function DatabaseCleanupPage() {
                 <div>
                   <h3 className="font-medium mb-2">Standardní tabulky (bezpečné)</h3>
                   <div className="flex flex-wrap gap-2">
-                    {tablesInfo?.safeToKeep.map((table: any, index: number) => (
+                    {tablesInfo.safeToKeep && tablesInfo.safeToKeep.map((table: any, index: number) => (
                       <Badge key={index} variant="outline" className="bg-green-50">
                         {table.name}
                       </Badge>
