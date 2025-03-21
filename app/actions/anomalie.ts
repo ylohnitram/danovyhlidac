@@ -51,37 +51,75 @@ function getMockAnomalies() {
   ];
 }
 
-// Funkce pro ověření, zda existuje tabulka (case-insensitive)
-async function checkTableExists(tableName: string): Promise<boolean> {
+// Funkce pro získání přesného názvu tabulky (case-sensitive)
+async function getExactTableName(tableName: string): Promise<string | null> {
   try {
-    // Použijeme SQL dotaz přímo s malým písmem u názvu tabulky
     const result = await prisma.$queryRaw`
-      SELECT 1 FROM pg_tables 
+      SELECT tablename FROM pg_tables 
       WHERE schemaname='public' 
       AND LOWER(tablename)=LOWER(${tableName})
     `;
     
-    return Array.isArray(result) && result.length > 0;
+    if (Array.isArray(result) && result.length > 0) {
+      return result[0].tablename;
+    }
+    return null;
   } catch (error) {
-    console.error(`Chyba při ověřování existence tabulky ${tableName}:`, error);
-    return false;
+    console.error(`Chyba při zjišťování přesného názvu tabulky ${tableName}:`, error);
+    return null;
   }
 }
 
 // Funkce pro ověření, zda je databáze správně inicializována
-async function isDatabaseInitialized(): Promise<boolean> {
+async function isDatabaseInitialized(): Promise<{
+  ready: boolean;
+  tableMap?: Record<string, string | null>;
+  errorDetails?: string;
+}> {
   try {
-    // Ověříme, zda existují všechny potřebné tabulky
-    const smlouvaExists = await checkTableExists('smlouva');
-    const dodavatelExists = await checkTableExists('dodavatel');
-    const dodatekExists = await checkTableExists('dodatek');
-    const podnetExists = await checkTableExists('podnet');
+    // Zjistíme přesné názvy tabulek
+    const tables = ['smlouva', 'dodavatel', 'dodatek', 'podnet'];
+    const tableInfo = await Promise.all(
+      tables.map(async tableName => {
+        const exactName = await getExactTableName(tableName);
+        return { tableName, exactName };
+      })
+    );
     
-    // Databáze je inicializována, pokud existují všechny tabulky
-    return smlouvaExists && dodavatelExists && dodatekExists && podnetExists;
+    const tableMap = Object.fromEntries(
+      tableInfo.map(t => [t.tableName, t.exactName])
+    );
+    
+    // Pokud některá tabulka neexistuje, vrátíme false
+    const missingTables = tableInfo.filter(t => !t.exactName).map(t => t.tableName);
+    if (missingTables.length > 0) {
+      return { 
+        ready: false, 
+        tableMap,
+        errorDetails: `Chybějící tabulky: ${missingTables.join(', ')}`
+      };
+    }
+    
+    // Zkontrolujeme, zda můžeme přistupovat k datům v tabulkách
+    try {
+      // Zkusíme jednoduchý dotaz na počet záznamů v tabulce smlouva
+      const countQuery = `SELECT COUNT(*) as count FROM "${tableMap.smlouva}"`;
+      await prisma.$queryRawUnsafe(countQuery);
+      
+      return { ready: true, tableMap };
+    } catch (queryError) {
+      return { 
+        ready: false, 
+        tableMap,
+        errorDetails: `Chyba při přístupu k datům: ${queryError instanceof Error ? queryError.message : String(queryError)}`
+      };
+    }
   } catch (error) {
     console.error('Chyba při kontrole inicializace databáze:', error);
-    return false;
+    return { 
+      ready: false,
+      errorDetails: `Neočekávaná chyba: ${error instanceof Error ? error.message : String(error)}`
+    };
   }
 }
 
@@ -94,9 +132,9 @@ export async function getNeobvykleSmlouvy(limit = 5) {
     }
 
     // Check if database is initialized
-    const isDbInitialized = await isDatabaseInitialized();
+    const dbStatus = await isDatabaseInitialized();
     
-    if (!isDbInitialized) {
+    if (!dbStatus.ready) {
       console.warn("Databáze není plně inicializovaná - vracím mockovaná data");
       const mockData = getMockAnomalies();
       return { 
@@ -105,16 +143,19 @@ export async function getNeobvykleSmlouvy(limit = 5) {
         mock: true, 
         dbStatus: {
           ready: false,
-          message: "Databázové tabulky nejsou vytvořeny nebo jsou nekonzistentní. Je potřeba spustit migrace."
+          message: `Databázové tabulky nejsou správně nastaveny. ${dbStatus.errorDetails || "Je potřeba spustit inicializaci databáze."}`
         } 
       };
     }
 
+    // Máme správné názvy tabulek
+    const tableMap = dbStatus.tableMap!;
+
     try {
-      // Použijeme raw SQL dotazy s přesnými názvy tabulek v lowercase, jak je očekává Postgres
+      // Použijeme $queryRawUnsafe s přesnými názvy tabulek
       
       // 1. Nová firma s velkou zakázkou
-      const newCompanyBigContracts = await prisma.$queryRaw`
+      const newCompanyQuery = `
         SELECT 
           s.id,
           s.nazev as title,
@@ -125,15 +166,16 @@ export async function getNeobvykleSmlouvy(limit = 5) {
           'IT služby' as category,
           ARRAY['nová firma', 'malá firma', 'velká částka']::text[] as flags,
           'Společnost založená před méně než 6 měsíci získala zakázku nad 10M Kč.' as description
-        FROM "smlouva" s
-        JOIN "dodavatel" d ON s.dodavatel = d.nazev
+        FROM "${tableMap.smlouva}" s
+        JOIN "${tableMap.dodavatel}" d ON s.dodavatel = d.nazev
         WHERE d.datum_zalozeni > NOW() - INTERVAL '6 months'
         AND s.castka > 10000000
         LIMIT 5
       `;
+      const newCompanyBigContracts = await prisma.$queryRawUnsafe(newCompanyQuery);
 
       // 2. Zakázky bez výběrového řízení
-      const noTenderContracts = await prisma.$queryRaw`
+      const noTenderQuery = `
         SELECT 
           s.id,
           s.nazev as title,
@@ -144,14 +186,15 @@ export async function getNeobvykleSmlouvy(limit = 5) {
           'Stavební práce' as category,
           ARRAY['bez výběrového řízení', 'časová tíseň']::text[] as flags,
           'Zakázka zadána bez řádného výběrového řízení s odvoláním na výjimku.' as description
-        FROM "smlouva" s
+        FROM "${tableMap.smlouva}" s
         WHERE s.typ_rizeni = 'bez výběrového řízení'
         AND s.castka > 5000000
         LIMIT 5
       `;
+      const noTenderContracts = await prisma.$queryRawUnsafe(noTenderQuery);
 
       // 3. Dodatky navyšující cenu
-      const priceIncreaseContracts = await prisma.$queryRaw`
+      const priceIncreaseQuery = `
         SELECT 
           s.id,
           s.nazev as title,
@@ -162,30 +205,69 @@ export async function getNeobvykleSmlouvy(limit = 5) {
           'Stavební práce' as category,
           ARRAY['dodatky', 'navýšení ceny']::text[] as flags,
           'Původní zakázka byla výrazně navýšena dodatky.' as description
-        FROM "smlouva" s
+        FROM "${tableMap.smlouva}" s
         WHERE EXISTS (
-          SELECT 1 FROM "dodatek" d 
+          SELECT 1 FROM "${tableMap.dodatek}" d 
           WHERE d.smlouva_id = s.id 
           GROUP BY d.smlouva_id
           HAVING SUM(d.castka) > s.castka * 0.3
         )
         LIMIT 5
       `;
+      const priceIncreaseContracts = await prisma.$queryRawUnsafe(priceIncreaseQuery);
 
-      // Spojit všechny výsledky a omezit počet
-      const allAnomalies = [
+      // 4. Pokud nemáme žádné anomálie (databáze je prázdná), přidáme ukázkové smlouvy
+      let allAnomalies = [
         ...newCompanyBigContracts,
         ...noTenderContracts,
         ...priceIncreaseContracts
-      ]
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-      .slice(0, limit);
+      ];
+      
+      // Pokud nemáme žádné anomálie, přečteme alespoň pár běžných smluv z databáze
+      if (allAnomalies.length === 0) {
+        const recentContractsQuery = `
+          SELECT 
+            s.id,
+            s.nazev as title,
+            s.castka as amount,
+            s.datum as date,
+            s.dodavatel as contractor,
+            s.zadavatel as authority,
+            'Běžná smlouva' as category,
+            ARRAY['běžná smlouva']::text[] as flags,
+            'Standardní smlouva' as description
+          FROM "${tableMap.smlouva}" s
+          ORDER BY s.datum DESC
+          LIMIT 5
+        `;
+        
+        const recentContracts = await prisma.$queryRawUnsafe(recentContractsQuery);
+        allAnomalies = [...recentContracts];
+      }
+      
+      // A pokud stále nemáme žádné smlouvy, použijeme mock data
+      if (allAnomalies.length === 0) {
+        return { 
+          data: getMockAnomalies(), 
+          cached: false, 
+          mock: true,
+          dbStatus: {
+            ready: true,
+            message: "Databáze je připravena, ale neobsahuje žádná data."
+          }
+        };
+      }
+      
+      // Seřadit podle data a omezit počet
+      const finalResults = allAnomalies
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, limit);
       
       // Uložit do cache
-      await cacheStats("neobvykleSmlouvy", allAnomalies);
+      await cacheStats("neobvykleSmlouvy", finalResults);
       
       return { 
-        data: allAnomalies, 
+        data: finalResults, 
         cached: false,
         dbStatus: {
           ready: true
@@ -198,10 +280,11 @@ export async function getNeobvykleSmlouvy(limit = 5) {
         data: mockData, 
         cached: false, 
         mock: true, 
-        error: dbError.message,
+        error: dbError instanceof Error ? dbError.message : String(dbError),
         dbStatus: {
           ready: false,
-          message: "Došlo k chybě při dotazování do databáze: " + dbError.message
+          message: "Došlo k chybě při dotazování do databáze: " + 
+            (dbError instanceof Error ? dbError.message : String(dbError))
         }
       };
     }

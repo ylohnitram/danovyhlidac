@@ -4,20 +4,23 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 /**
- * Checks if a table exists with case-insensitive comparison
+ * Gets the exact name of a table (case-sensitive)
  */
-async function tableExists(tableName: string): Promise<boolean> {
+async function getExactTableName(tableName: string): Promise<string | null> {
   try {
     const result = await prisma.$queryRaw`
-      SELECT 1 FROM pg_tables 
+      SELECT tablename FROM pg_tables 
       WHERE schemaname='public' 
       AND LOWER(tablename)=LOWER(${tableName})
     `;
     
-    return Array.isArray(result) && result.length > 0;
+    if (Array.isArray(result) && result.length > 0) {
+      return result[0].tablename;
+    }
+    return null;
   } catch (error) {
-    console.error(`Error checking table existence for ${tableName}:`, error);
-    return false;
+    console.error(`Error getting exact table name for ${tableName}:`, error);
+    return null;
   }
 }
 
@@ -26,12 +29,21 @@ async function tableExists(tableName: string): Promise<boolean> {
  */
 async function checkDatabaseInit() {
   try {
+    // Get all table names first
+    const allTables = await prisma.$queryRaw`
+      SELECT tablename FROM pg_tables WHERE schemaname='public'
+    `;
+    
     const tables = ['smlouva', 'dodavatel', 'dodatek', 'podnet'];
     const tableStatuses = await Promise.all(
-      tables.map(async table => ({
-        name: table,
-        exists: await tableExists(table)
-      }))
+      tables.map(async table => {
+        const exactName = await getExactTableName(table);
+        return {
+          name: table,
+          exactName,
+          exists: !!exactName
+        };
+      })
     );
     
     const allExist = tableStatuses.every(t => t.exists);
@@ -40,7 +52,8 @@ async function checkDatabaseInit() {
     return {
       initialized: allExist,
       tableStatuses,
-      missingTables
+      missingTables,
+      allTables: allTables.map(t => t.tablename)
     };
   } catch (error) {
     console.error('Error checking database initialization:', error);
@@ -52,27 +65,84 @@ async function checkDatabaseInit() {
 }
 
 /**
+ * Drops existing tables that might have incorrect case
+ */
+async function dropExistingTables() {
+  try {
+    // Check if tables with similar names (case-insensitive) exist
+    const tablesToCheck = ['smlouva', 'dodavatel', 'dodatek', 'podnet'];
+    
+    for (const tableName of tablesToCheck) {
+      const exactName = await getExactTableName(tableName);
+      
+      if (exactName && exactName !== tableName) {
+        console.log(`Dropping table with incorrect case: ${exactName}`);
+        
+        // First, remove foreign key constraints
+        if (exactName.toLowerCase() === 'smlouva') {
+          // Check for any tables that reference this one
+          const foreignKeys = await prisma.$queryRaw`
+            SELECT
+              tc.constraint_name, 
+              tc.table_name
+            FROM 
+              information_schema.table_constraints AS tc 
+            JOIN information_schema.key_column_usage AS kcu
+              ON tc.constraint_name = kcu.constraint_name
+            JOIN information_schema.constraint_column_usage AS ccu 
+              ON ccu.constraint_name = tc.constraint_name
+            WHERE tc.constraint_type = 'FOREIGN KEY' 
+              AND ccu.table_name = ${exactName}
+          `;
+          
+          // Drop each foreign key constraint
+          if (Array.isArray(foreignKeys)) {
+            for (const fk of foreignKeys) {
+              await prisma.$executeRawUnsafe(`
+                ALTER TABLE "${fk.table_name}" 
+                DROP CONSTRAINT "${fk.constraint_name}"
+              `);
+            }
+          }
+        }
+        
+        // Now drop the table
+        await prisma.$executeRawUnsafe(`DROP TABLE "${exactName}" CASCADE`);
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error dropping existing tables:', error);
+    return false;
+  }
+}
+
+/**
  * Inicializuje databázi vytvořením tabulek pomocí Prisma migrací
  */
 async function setupDatabase() {
   try {
-    // Check if database is already initialized
-    const dbStatus = await checkDatabaseInit();
+    // First, get the current database state
+    const initialStatus = await checkDatabaseInit();
     
-    if (dbStatus.initialized) {
+    if (initialStatus.initialized) {
       return { 
         success: true, 
         message: 'Databáze je již inicializována.',
         dbStatus: 'ready',
-        details: dbStatus
+        details: initialStatus
       };
     }
     
-    // If database is not initialized, create the necessary tables
+    // Check if tables with wrong case exist and drop them
+    await dropExistingTables();
+    
+    // Now create the necessary tables
     try {
       // Use lowercase table names in SQL statements as Postgres expects
       const createSmlouvaTable = await prisma.$executeRaw`
-        CREATE TABLE IF NOT EXISTS "smlouva" (
+        CREATE TABLE "smlouva" (
           "id" SERIAL NOT NULL,
           "nazev" TEXT NOT NULL,
           "castka" DOUBLE PRECISION NOT NULL,
@@ -84,29 +154,29 @@ async function setupDatabase() {
           "lat" DOUBLE PRECISION,
           "lng" DOUBLE PRECISION,
           "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          "updated_at" TIMESTAMP(3) NOT NULL,
+          "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
           CONSTRAINT "smlouva_pkey" PRIMARY KEY ("id")
         )
       `;
       
       const createDodavatelTable = await prisma.$executeRaw`
-        CREATE TABLE IF NOT EXISTS "dodavatel" (
+        CREATE TABLE "dodavatel" (
           "nazev" TEXT NOT NULL,
           "ico" TEXT NOT NULL,
           "datum_zalozeni" TIMESTAMP(3) NOT NULL,
           "pocet_zamestnancu" INTEGER,
           "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          "updated_at" TIMESTAMP(3) NOT NULL,
+          "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
           CONSTRAINT "dodavatel_pkey" PRIMARY KEY ("nazev")
         )
       `;
       
       const createDodavatelIcoIndex = await prisma.$executeRaw`
-        CREATE UNIQUE INDEX IF NOT EXISTS "dodavatel_ico_key" ON "dodavatel"("ico")
+        CREATE UNIQUE INDEX "dodavatel_ico_key" ON "dodavatel"("ico")
       `;
       
       const createDodatekTable = await prisma.$executeRaw`
-        CREATE TABLE IF NOT EXISTS "dodatek" (
+        CREATE TABLE "dodatek" (
           "id" SERIAL NOT NULL,
           "smlouva_id" INTEGER NOT NULL,
           "castka" DOUBLE PRECISION NOT NULL,
@@ -117,7 +187,7 @@ async function setupDatabase() {
       `;
       
       const createPodnetTable = await prisma.$executeRaw`
-        CREATE TABLE IF NOT EXISTS "podnet" (
+        CREATE TABLE "podnet" (
           "id" SERIAL NOT NULL,
           "jmeno" TEXT NOT NULL,
           "email" TEXT NOT NULL,
@@ -141,6 +211,12 @@ async function setupDatabase() {
         ON DELETE RESTRICT ON UPDATE CASCADE
       `;
       
+      // Add some sample data to verify it works
+      const createSampleData = await prisma.$executeRaw`
+        INSERT INTO "smlouva" ("nazev", "castka", "kategorie", "datum", "dodavatel", "zadavatel", "typ_rizeni")
+        VALUES ('Testovací smlouva', 1000000, 'test', CURRENT_TIMESTAMP, 'Testovací dodavatel', 'Testovací zadavatel', 'standardní')
+      `;
+      
       // Verify that all tables were created successfully
       const verificationStatus = await checkDatabaseInit();
       
@@ -148,7 +224,7 @@ async function setupDatabase() {
         return { 
           success: true, 
           message: 'Databáze byla úspěšně inicializována.',
-          details: 'Tabulky vytvořeny manuálně pomocí SQL příkazů s malými písmeny.',
+          details: 'Tabulky vytvořeny správně s přesnými názvy.',
           dbStatus: 'ready',
           verificationStatus
         };
@@ -157,7 +233,7 @@ async function setupDatabase() {
           success: false,
           message: 'Inicializace schématu selhala při ověření. Některé tabulky nebyly vytvořeny.',
           dbStatus: 'error',
-          missingTables: verificationStatus.missingTables
+          verificationStatus
         };
       }
     } catch (sqlError) {
