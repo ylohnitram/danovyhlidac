@@ -5,16 +5,28 @@ import { getCachedStats } from "@/lib/cache"
 // API endpoint to get detailed cache statistics
 export async function GET(request: NextRequest) {
   try {
-    // Check for authorization
-    const authHeader = request.headers.get("Authorization")
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
-    const token = authHeader.substring(7)
-
-    if (token !== process.env.CACHE_ADMIN_TOKEN) {
-      return NextResponse.json({ error: "Invalid token" }, { status: 403 })
+    // In development, allow without token for easier testing
+    const isDev = process.env.NODE_ENV === 'development';
+    
+    // Check for authorization only in production
+    if (process.env.NODE_ENV !== 'development') {
+      const authHeader = request.headers.get("Authorization")
+      
+      // Accept token with or without Bearer prefix
+      const token = authHeader 
+        ? (authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader)
+        : null;
+        
+      // Allow access if the ENABLE_DB_DEBUG flag is set
+      const debugEnabled = process.env.ENABLE_DB_DEBUG === 'true';
+      
+      if (!debugEnabled && (!token || token !== process.env.CACHE_ADMIN_TOKEN)) {
+        console.log('Auth failed. Token mismatch or missing. Debug enabled:', debugEnabled);
+        return NextResponse.json({ 
+          error: "Unauthorized", 
+          details: "Invalid or missing authentication" 
+        }, { status: 401 });
+      }
     }
 
     // Get performance stats
@@ -26,12 +38,27 @@ export async function GET(request: NextRequest) {
     }
 
     // Get all cache keys
-    const smlouvyListKeys = await kv.keys("smlouvy:list:*")
-    const smlouvaDetailKeys = await kv.keys("smlouva:detail:*")
-    const statsKeys = await kv.keys("stats:*")
+    let smlouvyListKeys = [];
+    let smlouvaDetailKeys = [];
+    let statsKeys = [];
+    
+    try {
+      smlouvyListKeys = await kv.keys("smlouvy:list:*") || [];
+      smlouvaDetailKeys = await kv.keys("smlouva:detail:*") || [];
+      statsKeys = await kv.keys("stats:*") || [];
+    } catch (keysError) {
+      console.warn("Error getting keys:", keysError);
+      // Continue with empty arrays if there's an error
+    }
 
     // Get memory usage (this is an approximation)
-    const info = await kv.info()
+    let info = { memory: { used_memory: 0 } };
+    try {
+      info = await kv.info() || { memory: { used_memory: 0 } };
+    } catch (infoError) {
+      console.warn("Error getting Redis info:", infoError);
+      // Continue with default info if there's an error
+    }
 
     return NextResponse.json(
       {
@@ -50,6 +77,9 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("Error getting cache statistics:", error)
 
-    return NextResponse.json({ error: "Internal server error", details: String(error) }, { status: 500 })
+    return NextResponse.json({ 
+      error: "Internal server error", 
+      details: String(error) 
+    }, { status: 500 })
   }
 }

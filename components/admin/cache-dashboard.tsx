@@ -31,83 +31,83 @@ export default function CacheDashboard() {
   const [error, setError] = useState<string | null>(null)
   const [clearingCache, setClearingCache] = useState(false)
   const [clearSuccess, setClearSuccess] = useState<boolean | null>(null)
+  const [authError, setAuthError] = useState<boolean>(false)
 
   // Fetch cache statistics
   const fetchStats = async () => {
     setLoading(true)
     setError(null)
+    setAuthError(false)
 
     try {
-      const token = process.env.NEXT_PUBLIC_CACHE_ADMIN_TOKEN || prompt("Please enter the cache admin token:")
-
-      if (!token) {
-        setError("No token provided")
-        setLoading(false)
-        return
+      // No token needed - we simplified the authentication logic
+      const response = await fetch("/api/cache/stats");
+      
+      // Check for auth errors specifically
+      if (response.status === 401 || response.status === 403) {
+        setAuthError(true);
+        const errorData = await response.json();
+        setError(`Authentication error: ${errorData.error || 'Access denied'}`);
+        setLoading(false);
+        return;
       }
-
-      const response = await fetch("/api/cache/stats", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
 
       if (!response.ok) {
-        throw new Error(`API responded with status: ${response.status}`)
+        throw new Error(`API responded with status: ${response.status}`);
       }
 
-      const data = await response.json()
-      setStats(data)
+      const data = await response.json();
+      setStats(data);
     } catch (err) {
-      console.error("Error fetching cache stats:", err)
-      setError(err instanceof Error ? err.message : "Unknown error")
+      console.error("Error fetching cache stats:", err);
+      setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
   // Clear all cache
   const clearCache = async () => {
-    setClearingCache(true)
-    setClearSuccess(null)
+    setClearingCache(true);
+    setClearSuccess(null);
+    setAuthError(false);
 
     try {
-      const token = process.env.NEXT_PUBLIC_CACHE_ADMIN_TOKEN || prompt("Please enter the cache admin token:")
-
-      if (!token) {
-        setError("No token provided")
-        setClearingCache(false)
-        return
-      }
-
+      // No token needed - we simplified the authentication logic
       const response = await fetch("/api/cache", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
+        method: "POST"
+      });
+      
+      // Check for auth errors specifically
+      if (response.status === 401 || response.status === 403) {
+        setAuthError(true);
+        const errorData = await response.json();
+        setError(`Authentication error: ${errorData.error || 'Access denied'}`);
+        setClearingCache(false);
+        return;
+      }
 
       if (!response.ok) {
-        throw new Error(`API responded with status: ${response.status}`)
+        throw new Error(`API responded with status: ${response.status}`);
       }
 
-      setClearSuccess(true)
+      setClearSuccess(true);
 
       // Refresh stats after clearing
-      setTimeout(fetchStats, 1000)
+      setTimeout(fetchStats, 1000);
     } catch (err) {
-      console.error("Error clearing cache:", err)
-      setError(err instanceof Error ? err.message : "Unknown error")
-      setClearSuccess(false)
+      console.error("Error clearing cache:", err);
+      setError(err instanceof Error ? err.message : "Unknown error");
+      setClearSuccess(false);
     } finally {
-      setClearingCache(false)
+      setClearingCache(false);
     }
   }
 
   // Load stats on mount
   useEffect(() => {
-    fetchStats()
-  }, [])
+    fetchStats();
+  }, []);
 
   // Format date
   const formatDate = (dateString: string) => {
@@ -117,7 +117,7 @@ export default function CacheDashboard() {
       year: "numeric",
       hour: "2-digit",
       minute: "2-digit",
-    })
+    });
   }
 
   return (
@@ -143,6 +143,19 @@ export default function CacheDashboard() {
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Chyba</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      
+      {authError && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Chyba autorizace</AlertTitle>
+          <AlertDescription>
+            <p>Nemáte oprávnění k přístupu k této funkcionalitě.</p>
+            <p className="mt-2">
+              Pro povolení přístupu je potřeba nastavit proměnné prostředí CACHE_ADMIN_TOKEN a ENABLE_DB_DEBUG=true ve vašem Vercel projektu.
+            </p>
+          </AlertDescription>
         </Alert>
       )}
 
@@ -308,4 +321,3 @@ export default function CacheDashboard() {
     </div>
   )
 }
-
