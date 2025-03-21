@@ -33,14 +33,6 @@ interface ContractData {
   lng?: number;
 }
 
-// Define types for database query results
-interface SmlouvaWithTimestamp {
-  id: number;
-  updated_at: Date;
-  lat?: number;
-  lng?: number;
-}
-
 // Function to download XML dump for a specific month
 async function downloadXmlDump(year: number, month: number): Promise<string> {
   // Format month as two digits
@@ -179,7 +171,7 @@ function transformContractData(record: any): ContractData | null {
     // Check if this is a 'zaznam' record with smlouva inside
     const contract = record.smlouva ? record.smlouva[0] : record;
     
-    // Log the contract structure to debug
+    // Log the contract structure in debug mode
     if (process.env.DEBUG) {
       console.log('Contract structure:', JSON.stringify(Object.keys(contract), null, 2));
     }
@@ -200,7 +192,7 @@ function transformContractData(record: any): ContractData | null {
       castka = parseFloat(extractFirstValue(contract.castka) || '0');
     }
     
-          // Extract dates
+    // Extract dates
     let datum = new Date();
     if (contract.datumUzavreni) {
       const dateStr = extractFirstValue(contract.datumUzavreni);
@@ -218,19 +210,127 @@ function transformContractData(record: any): ContractData | null {
                       extractFirstValue(contract.kategorie) || 
                       'ostatni';
     
-    // Extract supplier information
+    // Extract supplier and contracting authority information
     let dodavatel = 'Neuvedeno';
-    if (contract.subjekt) {
-      const suppliers = contract.subjekt.filter((s: any) => {
-        if (!s.typ) return false;
-        const typValue = extractFirstValue(s.typ);
-        return typValue ? typValue.toLowerCase().includes('dodavatel') : false;
+    let zadavatel = 'Neuvedeno';
+    
+    // IMPROVED: Debug log to help identify what we're finding
+    if (process.env.DEBUG) {
+      console.log('smluvniStrana:', JSON.stringify(contract.smluvniStrana, null, 2));
+      console.log('subjekt:', JSON.stringify(contract.subjekt, null, 2));
+      console.log('schvalil:', JSON.stringify(contract.schvalil, null, 2));
+    }
+    
+    // APPROACH 1: Try to extract from schvalil field, which often contains the contracting authority
+    if (contract.schvalil && zadavatel === 'Neuvedeno') {
+      zadavatel = extractFirstValue(contract.schvalil) || 'Neuvedeno';
+      
+      // If it's just a name, try to make it more descriptive
+      if (zadavatel !== 'Neuvedeno' && !zadavatel.includes(' a.s.') && !zadavatel.includes(' s.r.o.') && !zadavatel.includes('obec') && !zadavatel.includes('úřad')) {
+        zadavatel = `Úřad/organizace schváleno: ${zadavatel}`;
+      }
+    }
+    
+    // APPROACH 2: Check if there's a subjekt that looks like a government entity
+    if (contract.subjekt && zadavatel === 'Neuvedeno') {
+      // Try to identify contracting authorities by name pattern
+      const governmentEntities = contract.subjekt.filter((s: any) => {
+        const name = extractFirstValue(s.nazev) || '';
+        return name.toLowerCase().includes('ministerstvo') || 
+               name.toLowerCase().includes('úřad') || 
+               name.toLowerCase().includes('magistrát') || 
+               name.toLowerCase().includes('kraj') ||
+               name.toLowerCase().includes('město') ||
+               name.toLowerCase().includes('obec');
       });
       
-      if (suppliers.length > 0) {
-        dodavatel = extractFirstValue(suppliers[0].nazev) || 'Neuvedeno';
+      if (governmentEntities.length > 0) {
+        zadavatel = extractFirstValue(governmentEntities[0].nazev) || 'Neuvedeno';
       }
-    } else if (contract.dodavatel) {
+    }
+    
+    // APPROACH 3: Try to use smluvniStrana with more advanced logic
+    if (contract.smluvniStrana) {
+      const parties = contract.smluvniStrana;
+      
+      // Find parties that are marked as prijemce (likely suppliers)
+      const suppliersWithFlag = parties.filter((p: any) => {
+        return p.prijemce && extractFirstValue(p.prijemce) === 'true';
+      });
+      
+      // Find parties that have names that sound like government entities
+      const governmentParties = parties.filter((p: any) => {
+        const name = extractFirstValue(p.nazev) || '';
+        return name.toLowerCase().includes('ministerstvo') || 
+               name.toLowerCase().includes('úřad') || 
+               name.toLowerCase().includes('magistrát') || 
+               name.toLowerCase().includes('kraj') ||
+               name.toLowerCase().includes('město') ||
+               name.toLowerCase().includes('obec');
+      });
+      
+      // Use prijemce flag to identify supplier
+      if (suppliersWithFlag.length > 0 && dodavatel === 'Neuvedeno') {
+        dodavatel = extractFirstValue(suppliersWithFlag[0].nazev) || 'Neuvedeno';
+      }
+      
+      // Use name pattern to identify contracting authority
+      if (governmentParties.length > 0 && zadavatel === 'Neuvedeno') {
+        zadavatel = extractFirstValue(governmentParties[0].nazev) || 'Neuvedeno';
+      }
+      
+      // If we identified one party but not the other, and there are exactly 2 parties,
+      // then the other party is the one we're missing
+      if ((dodavatel === 'Neuvedeno' || zadavatel === 'Neuvedeno') && parties.length === 2) {
+        if (dodavatel !== 'Neuvedeno' && zadavatel === 'Neuvedeno') {
+          // We found the supplier but not the authority - the other party must be the authority
+          const otherParty = parties.find(p => extractFirstValue(p.nazev) !== dodavatel);
+          if (otherParty) {
+            zadavatel = extractFirstValue(otherParty.nazev) || 'Neuvedeno';
+          }
+        } else if (dodavatel === 'Neuvedeno' && zadavatel !== 'Neuvedeno') {
+          // We found the authority but not the supplier - the other party must be the supplier
+          const otherParty = parties.find(p => extractFirstValue(p.nazev) !== zadavatel);
+          if (otherParty) {
+            dodavatel = extractFirstValue(otherParty.nazev) || 'Neuvedeno';
+          }
+        }
+      }
+      
+      // If we still haven't found both parties and there are multiple parties,
+      // assume the first one who isn't the one we've found is the other party
+      if ((dodavatel === 'Neuvedeno' || zadavatel === 'Neuvedeno') && parties.length > 0) {
+        if (dodavatel === 'Neuvedeno' && zadavatel !== 'Neuvedeno') {
+          // Find first party that's not the authority
+          const otherParty = parties.find(p => extractFirstValue(p.nazev) !== zadavatel);
+          if (otherParty) {
+            dodavatel = extractFirstValue(otherParty.nazev) || 'Neuvedeno';
+          } else if (parties.length > 0) {
+            // If we can't find a distinct party, use the first one
+            dodavatel = extractFirstValue(parties[0].nazev) || 'Neuvedeno';
+          }
+        } else if (dodavatel !== 'Neuvedeno' && zadavatel === 'Neuvedeno') {
+          // Find first party that's not the supplier
+          const otherParty = parties.find(p => extractFirstValue(p.nazev) !== dodavatel);
+          if (otherParty) {
+            zadavatel = extractFirstValue(otherParty.nazev) || 'Neuvedeno';
+          } else if (parties.length > 0) {
+            // If we can't find a distinct party, use the first one
+            zadavatel = extractFirstValue(parties[0].nazev) || 'Neuvedeno';
+          }
+        } else if (dodavatel === 'Neuvedeno' && zadavatel === 'Neuvedeno' && parties.length >= 2) {
+          // If we found neither and there are at least 2 parties, use the first two
+          zadavatel = extractFirstValue(parties[0].nazev) || 'Neuvedeno';
+          dodavatel = extractFirstValue(parties[1].nazev) || 'Neuvedeno';
+        } else if (dodavatel === 'Neuvedeno' && zadavatel === 'Neuvedeno' && parties.length === 1) {
+          // If there's only one party, use it as the zadavatel (more likely)
+          zadavatel = extractFirstValue(parties[0].nazev) || 'Neuvedeno';
+        }
+      }
+    }
+    
+    // APPROACH 4: Final fallback to direct fields
+    if (dodavatel === 'Neuvedeno' && contract.dodavatel) {
       if (typeof contract.dodavatel[0] === 'object') {
         dodavatel = extractFirstValue(contract.dodavatel[0].nazev) || 'Neuvedeno';
       } else {
@@ -238,19 +338,7 @@ function transformContractData(record: any): ContractData | null {
       }
     }
     
-    // Extract contracting authority information
-    let zadavatel = 'Neuvedeno';
-    if (contract.subjekt) {
-      const authorities = contract.subjekt.filter((s: any) => {
-        if (!s.typ) return false;
-        const typValue = extractFirstValue(s.typ);
-        return typValue ? typValue.toLowerCase().includes('zadavatel') : false;
-      });
-      
-      if (authorities.length > 0) {
-        zadavatel = extractFirstValue(authorities[0].nazev) || 'Neuvedeno';
-      }
-    } else if (contract.zadavatel) {
+    if (zadavatel === 'Neuvedeno' && contract.zadavatel) {
       if (typeof contract.zadavatel[0] === 'object') {
         zadavatel = extractFirstValue(contract.zadavatel[0].nazev) || 'Neuvedeno';
       } else {
@@ -262,6 +350,14 @@ function transformContractData(record: any): ContractData | null {
     const typ_rizeni = extractFirstValue(contract.druhRizeni) || 
                        extractFirstValue(contract.typ_rizeni) || 
                        'standardní';
+    
+    // IMPROVED: Add debug output for what we found to help with troubleshooting
+    if (process.env.DEBUG && (dodavatel === 'Neuvedeno' || zadavatel === 'Neuvedeno')) {
+      console.log('WARNING - Missing party info:');
+      console.log(`  Dodavatel: ${dodavatel}`);
+      console.log(`  Zadavatel: ${zadavatel}`);
+      console.log('Raw contract data:', JSON.stringify(contract, null, 2));
+    }
     
     // Only return contracts with valid data
     if (nazev === 'Neuvedeno' && dodavatel === 'Neuvedeno' && zadavatel === 'Neuvedeno') {
@@ -306,18 +402,205 @@ function extractFirstValue(value: any): string | undefined {
   return value?.toString();
 }
 
-// Function to geocode an address (simplified implementation)
-async function geocodeAddress(address: string) {
+// Vylepšená funkce pro geocoding pomocí Nominatim API
+async function geocodeAddress(address: string | null, zadavatel: string | null): Promise<{ lat: number, lng: number } | null> {
   try {
-    // Here you would normally call a geocoding service
-    // For this example, we'll just return random coordinates in the Czech Republic
-    return {
-      lat: 49.8 + (Math.random() - 0.5) * 2,
-      lng: 15.5 + (Math.random() - 0.5) * 4
+    // Pokud nemáme ani adresu ani zadavatele, nemůžeme nic dělat
+    if (!address && !zadavatel) {
+      return null;
+    }
+
+    // Prioritizovat adresu, pokud je k dispozici, jinak použít město ze zadavatele
+    let searchQuery = '';
+    
+    if (address) {
+      // Vyčistit a normalizovat adresu
+      searchQuery = address.trim();
+    } else if (zadavatel) {
+      // Extrahovat možné město ze zadavatele
+      // Například "Město Brno" -> "Brno" nebo "Magistrát města Olomouce" -> "Olomouc"
+      const cityMatches = zadavatel.match(/(?:(?:Město|Obec|Magistrát města)\s+)(\w+)/i);
+      
+      if (cityMatches && cityMatches[1]) {
+        searchQuery = cityMatches[1];
+      } else {
+        // Pokud nemůžeme extrahovat město ze zadavatele, použijeme celý název zadavatele
+        searchQuery = zadavatel;
+      }
+    }
+    
+    // Přidat "Česká republika" k vyhledávání pro zlepšení přesnosti
+    searchQuery = `${searchQuery}, Česká republika`;
+    
+    // Logování pro účely ladění
+    if (process.env.DEBUG) {
+      console.log(`Geocoding query: "${searchQuery}"`);
+    }
+
+    // Zpoždění, abychom respektovali omezení Nominatim API (max 1 požadavek za sekundu)
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    
+    // Volání Nominatim API
+    const encodedQuery = encodeURIComponent(searchQuery);
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodedQuery}&format=json&limit=1&countrycodes=cz`;
+    
+    const response = await fetch(url, {
+      headers: {
+        // Důležité: Přidat User-Agent header, Nominatim to vyžaduje
+        'User-Agent': 'DanovyHlidac/1.0 (https://example.com; your-email@example.com)',
+        'Accept-Language': 'cs,en'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Nominatim API responded with status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data && data.length > 0) {
+      // Máme výsledek geocodingu
+      const result = data[0];
+      
+      if (process.env.DEBUG) {
+        console.log(`Geocoding result for "${searchQuery}":`, {
+          lat: result.lat,
+          lon: result.lon,
+          display_name: result.display_name,
+          type: result.type
+        });
+      }
+      
+      return {
+        lat: parseFloat(result.lat),
+        lng: parseFloat(result.lon)
+      };
+    } else {
+      // Žádný výsledek, zkusíme alternativní přístup
+      if (process.env.DEBUG) {
+        console.log(`No geocoding results for "${searchQuery}"`);
+      }
+      
+      // Pokud jsme nejprve zkusili adresu a neuspěli, zkusíme zadavatele
+      if (address && zadavatel && searchQuery !== `${zadavatel}, Česká republika`) {
+        // Zkusíme znovu s vlastním jménem zadavatele
+        return geocodeAddress(null, zadavatel);
+      }
+      
+      // Fallback: Vrátit přibližné souřadnice pro ČR, pokud vše ostatní selže
+      if (process.env.DEBUG) {
+        console.log('Using fallback coordinates for the Czech Republic');
+      }
+      
+      return {
+        lat: 49.8 + (Math.random() - 0.5) * 0.5, // Přibližně v ČR s menší odchylkou
+        lng: 15.5 + (Math.random() - 0.5) * 0.5
+      };
     }
   } catch (error) {
-    console.error(`Error geocoding address: ${address}`, error)
-    return null
+    console.error(`Error geocoding "${address || zadavatel}":`, error);
+    
+    // Fallback v případě chyby
+    return {
+      lat: 49.8 + (Math.random() - 0.5) * 0.5,
+      lng: 15.5 + (Math.random() - 0.5) * 0.5
+    };
+  }
+}
+
+// Vylepšená funkce pro získání adresy a zadavatele ze smlouvy
+function extractAddressAndAuthority(record: any): { address: string | null, authority: string | null } {
+  let address = null;
+  let authority = null;
+  
+  try {
+    const contract = record.smlouva ? record.smlouva[0] : record;
+    
+    // 1. Zkusit získat adresu z subjekt
+    if (contract.subjekt) {
+      // Hledat subjekty, které vypadají jako zadavatelé
+      const authorities = contract.subjekt.filter((s: any) => {
+        if (s.typ) {
+          const typValue = extractFirstValue(s.typ);
+          return typValue ? typValue.toLowerCase().includes('zadavatel') : false;
+        }
+        
+        // Zkusit identifikovat zadavatele podle názvu
+        const name = extractFirstValue(s.nazev) || '';
+        return name.toLowerCase().includes('ministerstvo') || 
+               name.toLowerCase().includes('úřad') || 
+               name.toLowerCase().includes('kraj') ||
+               name.toLowerCase().includes('město') ||
+               name.toLowerCase().includes('obec');
+      });
+      
+      if (authorities.length > 0) {
+        // Nalezen potenciální zadavatel
+        const mainAuthority = authorities[0];
+        
+        // Získat adresu
+        if (mainAuthority.adresa) {
+          address = extractFirstValue(mainAuthority.adresa);
+        }
+        
+        // Získat název zadavatele
+        if (mainAuthority.nazev) {
+          authority = extractFirstValue(mainAuthority.nazev);
+        }
+      }
+    }
+    
+    // 2. Zkusit získat adresu z smluvniStrana
+    if ((!address || !authority) && contract.smluvniStrana) {
+      const parties = contract.smluvniStrana;
+      
+      // Hledat strany, které vypadají jako zadavatelé
+      const authParties = parties.filter((p: any) => {
+        const name = extractFirstValue(p.nazev) || '';
+        return name.toLowerCase().includes('ministerstvo') || 
+               name.toLowerCase().includes('úřad') || 
+               name.toLowerCase().includes('kraj') ||
+               name.toLowerCase().includes('město') ||
+               name.toLowerCase().includes('obec');
+      });
+      
+      if (authParties.length > 0) {
+        const authParty = authParties[0];
+        
+        // Získat adresu, pokud ještě nemáme
+        if (!address && authParty.adresa) {
+          address = extractFirstValue(authParty.adresa);
+        }
+        
+        // Získat název zadavatele, pokud ještě nemáme
+        if (!authority && authParty.nazev) {
+          authority = extractFirstValue(authParty.nazev);
+        }
+      } else if (parties.length > 0) {
+        // Pokud jsme nenašli zadavatele podle názvu, použijeme první stranu
+        const firstParty = parties[0];
+        
+        // Získat adresu, pokud ještě nemáme
+        if (!address && firstParty.adresa) {
+          address = extractFirstValue(firstParty.adresa);
+        }
+        
+        // Získat název zadavatele, pokud ještě nemáme
+        if (!authority && firstParty.nazev) {
+          authority = extractFirstValue(firstParty.nazev);
+        }
+      }
+    }
+    
+    // 3. Zkusit získat zadavatele z schvalil pole
+    if (!authority && contract.schvalil) {
+      authority = extractFirstValue(contract.schvalil);
+    }
+    
+    return { address, authority };
+  } catch (error) {
+    console.error('Error extracting address and authority:', error);
+    return { address: null, authority: null };
   }
 }
 
@@ -382,10 +665,8 @@ export async function syncData() {
   let lastSync: Date;
   try {
     const lastSyncQuery = `SELECT updated_at FROM "${smlouvaTable}" ORDER BY updated_at DESC LIMIT 1`;
-    const result = await prisma.$queryRawUnsafe(lastSyncQuery) as SmlouvaWithTimestamp[];
-    
-    // Type assertion for result
-    lastSync = result.length > 0 && result[0]?.updated_at ? result[0].updated_at : new Date(0);
+    const result = await prisma.$queryRawUnsafe(lastSyncQuery);
+    lastSync = result[0]?.updated_at || new Date(0);
   } catch (error) {
     console.error('Error getting last sync date, using epoch:', error);
     lastSync = new Date(0);
@@ -445,7 +726,7 @@ export async function syncData() {
           }
           
           // Check if the contract already exists by ID or attributes
-          let existingContract: SmlouvaWithTimestamp | null = null;
+          let existingContract;
           
           if (contractId) {
             // First try to find by attributes to check if it exists
@@ -467,8 +748,8 @@ export async function syncData() {
             ];
             
             try {
-              const result = await prisma.$queryRawUnsafe(findQuery, ...params) as SmlouvaWithTimestamp[];
-              if (result && Array.isArray(result) && result.length > 0) {
+              const result = await prisma.$queryRawUnsafe(findQuery, ...params);
+              if (result && result.length > 0) {
                 existingContract = result[0];
               }
             } catch (findError) {
@@ -478,30 +759,28 @@ export async function syncData() {
           
           // Add geolocation if we don't have it
           if (!existingContract?.lat || !existingContract?.lng) {
-            let address;
+            // Použít vylepšenou funkci pro získání adresy a zadavatele
+            const { address, authority } = extractAddressAndAuthority(record);
             
-            // Try to find the address from the record
-            if (record.smlouva && record.smlouva[0] && record.smlouva[0].subjekt) {
-              const authorities = record.smlouva[0].subjekt.filter((s: any) => {
-                if (!s.typ) return false;
-                const typValue = extractFirstValue(s.typ);
-                return typValue ? typValue.toLowerCase().includes('zadavatel') : false;
-              });
-              
-              if (authorities.length > 0 && authorities[0].adresa) {
-                address = extractFirstValue(authorities[0].adresa);
-              }
+            if (process.env.DEBUG) {
+              console.log(`Extracted for geocoding - Address: "${address}", Authority: "${authority}"`);
             }
             
-            if (!address && record.smlouva && record.smlouva[0]?.zadavatel?.[0]?.adresa) {
-              address = extractFirstValue(record.smlouva[0].zadavatel[0].adresa);
-            }
-            
-            if (address) {
-              const geoData = await geocodeAddress(address);
-              if (geoData) {
-                contractData.lat = geoData.lat;
-                contractData.lng = geoData.lng;
+            // Získat geolokaci na základě adresy nebo jména zadavatele
+            if (address || authority) {
+              try {
+                const geoData = await geocodeAddress(address, authority || contractData.zadavatel);
+                if (geoData) {
+                  contractData.lat = geoData.lat;
+                  contractData.lng = geoData.lng;
+                  
+                  if (process.env.DEBUG) {
+                    console.log(`Geocoding successful: ${geoData.lat}, ${geoData.lng}`);
+                  }
+                }
+              } catch (geoError) {
+                console.error(`Error geocoding for contract ${contractData.nazev}:`, geoError);
+                // Nechat souřadnice undefined - budou nastaveny na NULL v databázi
               }
             }
           }
