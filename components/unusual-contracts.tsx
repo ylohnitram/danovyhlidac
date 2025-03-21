@@ -14,7 +14,6 @@ export default function UnusualContracts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isCached, setIsCached] = useState(false);
-  const [isMockData, setIsMockData] = useState(false);
   const [databaseStatus, setDatabaseStatus] = useState<{
     ready: boolean;
     message?: string;
@@ -41,7 +40,6 @@ export default function UnusualContracts() {
       if (result.data && result.data.length > 0) {
         setContracts(result.data);
         setIsCached(result.cached || false);
-        setIsMockData(result.mock || false);
       } else {
         setContracts([]);
       }
@@ -98,13 +96,12 @@ export default function UnusualContracts() {
     <div className="space-y-4">
       <div className="flex justify-between mb-2">
         <div>
-          {isMockData && (
+          {!databaseStatus.ready && (
             <Alert variant="warning" className="mb-4 bg-amber-50 border-amber-200">
               <Info className="h-4 w-4 text-amber-600" />
-              <AlertTitle className="text-amber-800">Ukázková data</AlertTitle>
+              <AlertTitle className="text-amber-800">Problém s databází</AlertTitle>
               <AlertDescription className="text-amber-700">
-                Zobrazují se ukázková data, jelikož databáze není plně inicializována.
-                {databaseStatus.message && <div className="mt-1">{databaseStatus.message}</div>}
+                {databaseStatus.message || "Databáze není správně nakonfigurována."}
               </AlertDescription>
             </Alert>
           )}
@@ -116,7 +113,7 @@ export default function UnusualContracts() {
         />
       </div>
       
-      {!databaseStatus.ready && !isMockData && (
+      {!databaseStatus.ready && (
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center gap-3 mb-4 text-amber-600">
@@ -134,7 +131,7 @@ export default function UnusualContracts() {
         </Card>
       )}
       
-      {contracts.length > 0 ? (
+      {databaseStatus.ready && contracts.length > 0 ? (
         contracts.map((contract) => (
           <Card key={contract.id} className="border-amber-200 bg-amber-50">
             <CardHeader className="pb-2">
@@ -173,13 +170,21 @@ export default function UnusualContracts() {
             </CardFooter>
           </Card>
         ))
-      ) : (
+      ) : databaseStatus.ready ? (
         <Card>
           <CardContent className="p-6 text-center">
-            <p className="text-muted-foreground">Nebyly nalezeny žádné neobvyklé zakázky.</p>
+            <p className="text-muted-foreground">Nebyly nalezeny žádné neobvyklé zakázky v databázi.</p>
+            <p className="text-sm text-muted-foreground mt-2">
+              Je možné, že žádná zakázka nesplňuje kritéria pro označení jako neobvyklá,
+              nebo databáze neobsahuje dostatek dat pro analýzu.
+            </p>
+            <Button onClick={loadData} variant="outline" className="mt-4">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Obnovit
+            </Button>
           </CardContent>
         </Card>
-      )}
+      ) : null}
     </div>
   )
 }

@@ -33,6 +33,14 @@ interface ContractData {
   lng?: number;
 }
 
+// Interface for contractParty to avoid 'any' types
+interface ContractParty {
+  nazev?: any[];
+  prijemce?: any[];
+  adresa?: any[];
+  [key: string]: any;
+}
+
 // Function to download XML dump for a specific month
 async function downloadXmlDump(year: number, month: number): Promise<string> {
   // Format month as two digits
@@ -251,15 +259,15 @@ function transformContractData(record: any): ContractData | null {
     
     // APPROACH 3: Try to use smluvniStrana with more advanced logic
     if (contract.smluvniStrana) {
-      const parties = contract.smluvniStrana;
+      const parties: ContractParty[] = contract.smluvniStrana;
       
       // Find parties that are marked as prijemce (likely suppliers)
-      const suppliersWithFlag = parties.filter((p: any) => {
+      const suppliersWithFlag = parties.filter((p: ContractParty) => {
         return p.prijemce && extractFirstValue(p.prijemce) === 'true';
       });
       
       // Find parties that have names that sound like government entities
-      const governmentParties = parties.filter((p: any) => {
+      const governmentParties = parties.filter((p: ContractParty) => {
         const name = extractFirstValue(p.nazev) || '';
         return name.toLowerCase().includes('ministerstvo') || 
                name.toLowerCase().includes('úřad') || 
@@ -284,13 +292,13 @@ function transformContractData(record: any): ContractData | null {
       if ((dodavatel === 'Neuvedeno' || zadavatel === 'Neuvedeno') && parties.length === 2) {
         if (dodavatel !== 'Neuvedeno' && zadavatel === 'Neuvedeno') {
           // We found the supplier but not the authority - the other party must be the authority
-          const otherParty = parties.find(p => extractFirstValue(p.nazev) !== dodavatel);
+          const otherParty = parties.find((p: ContractParty) => extractFirstValue(p.nazev) !== dodavatel);
           if (otherParty) {
             zadavatel = extractFirstValue(otherParty.nazev) || 'Neuvedeno';
           }
         } else if (dodavatel === 'Neuvedeno' && zadavatel !== 'Neuvedeno') {
           // We found the authority but not the supplier - the other party must be the supplier
-          const otherParty = parties.find(p => extractFirstValue(p.nazev) !== zadavatel);
+          const otherParty = parties.find((p: ContractParty) => extractFirstValue(p.nazev) !== zadavatel);
           if (otherParty) {
             dodavatel = extractFirstValue(otherParty.nazev) || 'Neuvedeno';
           }
@@ -302,7 +310,7 @@ function transformContractData(record: any): ContractData | null {
       if ((dodavatel === 'Neuvedeno' || zadavatel === 'Neuvedeno') && parties.length > 0) {
         if (dodavatel === 'Neuvedeno' && zadavatel !== 'Neuvedeno') {
           // Find first party that's not the authority
-          const otherParty = parties.find(p => extractFirstValue(p.nazev) !== zadavatel);
+          const otherParty = parties.find((p: ContractParty) => extractFirstValue(p.nazev) !== zadavatel);
           if (otherParty) {
             dodavatel = extractFirstValue(otherParty.nazev) || 'Neuvedeno';
           } else if (parties.length > 0) {
@@ -311,7 +319,7 @@ function transformContractData(record: any): ContractData | null {
           }
         } else if (dodavatel !== 'Neuvedeno' && zadavatel === 'Neuvedeno') {
           // Find first party that's not the supplier
-          const otherParty = parties.find(p => extractFirstValue(p.nazev) !== dodavatel);
+          const otherParty = parties.find((p: ContractParty) => extractFirstValue(p.nazev) !== dodavatel);
           if (otherParty) {
             zadavatel = extractFirstValue(otherParty.nazev) || 'Neuvedeno';
           } else if (parties.length > 0) {
@@ -458,7 +466,7 @@ async function geocodeAddress(address: string | null, zadavatel: string | null):
     
     const data = await response.json();
     
-    if (data && data.length > 0) {
+    if (Array.isArray(data) && data.length > 0) {
       // Máme výsledek geocodingu
       const result = data[0];
       
@@ -510,8 +518,8 @@ async function geocodeAddress(address: string | null, zadavatel: string | null):
 
 // Vylepšená funkce pro získání adresy a zadavatele ze smlouvy
 function extractAddressAndAuthority(record: any): { address: string | null, authority: string | null } {
-  let address = null;
-  let authority = null;
+  let address: string | null = null;
+  let authority: string | null = null;
   
   try {
     const contract = record.smlouva ? record.smlouva[0] : record;
@@ -538,14 +546,14 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
         // Nalezen potenciální zadavatel
         const mainAuthority = authorities[0];
         
-        // Získat adresu
+                  // Získat adresu
         if (mainAuthority.adresa) {
-          address = extractFirstValue(mainAuthority.adresa);
+          address = extractFirstValue(mainAuthority.adresa) || null;
         }
         
         // Získat název zadavatele
         if (mainAuthority.nazev) {
-          authority = extractFirstValue(mainAuthority.nazev);
+          authority = extractFirstValue(mainAuthority.nazev) || null;
         }
       }
     }
@@ -569,12 +577,12 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
         
         // Získat adresu, pokud ještě nemáme
         if (!address && authParty.adresa) {
-          address = extractFirstValue(authParty.adresa);
+          address = extractFirstValue(authParty.adresa) || null;
         }
         
         // Získat název zadavatele, pokud ještě nemáme
         if (!authority && authParty.nazev) {
-          authority = extractFirstValue(authParty.nazev);
+          authority = extractFirstValue(authParty.nazev) || null;
         }
       } else if (parties.length > 0) {
         // Pokud jsme nenašli zadavatele podle názvu, použijeme první stranu
@@ -582,22 +590,26 @@ function extractAddressAndAuthority(record: any): { address: string | null, auth
         
         // Získat adresu, pokud ještě nemáme
         if (!address && firstParty.adresa) {
-          address = extractFirstValue(firstParty.adresa);
+          address = extractFirstValue(firstParty.adresa) || null;
         }
         
         // Získat název zadavatele, pokud ještě nemáme
         if (!authority && firstParty.nazev) {
-          authority = extractFirstValue(firstParty.nazev);
+          authority = extractFirstValue(firstParty.nazev) || null;
         }
       }
     }
     
     // 3. Zkusit získat zadavatele z schvalil pole
     if (!authority && contract.schvalil) {
-      authority = extractFirstValue(contract.schvalil);
+      authority = extractFirstValue(contract.schvalil) || null;
     }
     
-    return { address, authority };
+    // Ensure we return null instead of undefined
+    return { 
+      address: address || null, 
+      authority: authority || null 
+    };
   } catch (error) {
     console.error('Error extracting address and authority:', error);
     return { address: null, authority: null };
@@ -666,7 +678,12 @@ export async function syncData() {
   try {
     const lastSyncQuery = `SELECT updated_at FROM "${smlouvaTable}" ORDER BY updated_at DESC LIMIT 1`;
     const result = await prisma.$queryRawUnsafe(lastSyncQuery);
-    lastSync = result[0]?.updated_at || new Date(0);
+    
+    // Cast the result to an appropriate type and handle possible undefined values
+    const resultArray = result as Array<{updated_at?: Date}>;
+    lastSync = resultArray.length > 0 && resultArray[0]?.updated_at 
+      ? resultArray[0].updated_at 
+      : new Date(0);
   } catch (error) {
     console.error('Error getting last sync date, using epoch:', error);
     lastSync = new Date(0);
@@ -726,7 +743,7 @@ export async function syncData() {
           }
           
           // Check if the contract already exists by ID or attributes
-          let existingContract;
+          let existingContract: { id: number, lat?: number, lng?: number } | null = null;
           
           if (contractId) {
             // First try to find by attributes to check if it exists
@@ -749,8 +766,10 @@ export async function syncData() {
             
             try {
               const result = await prisma.$queryRawUnsafe(findQuery, ...params);
-              if (result && result.length > 0) {
-                existingContract = result[0];
+              // Properly check if the result is an array with at least one element
+              const resultArray = result as Array<{ id: number, lat?: number, lng?: number }>;
+              if (resultArray.length > 0) {
+                existingContract = resultArray[0];
               }
             } catch (findError) {
               console.error('Error finding existing contract:', findError);

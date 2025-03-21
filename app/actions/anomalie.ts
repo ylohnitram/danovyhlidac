@@ -12,45 +12,6 @@ const ANOMALY_TYPES = {
   BIG_AMOUNT: "velká částka"
 };
 
-// Funkce pro získání mock dat, když databáze není připravena
-function getMockAnomalies() {
-  return [
-    {
-      id: 1001,
-      title: "Rekonstrukce silnice I/35",
-      amount: 125000000,
-      date: new Date().toISOString(),
-      contractor: "Nová Firma s.r.o.",
-      authority: "ŘSD",
-      category: "silnice",
-      flags: ["nová firma", "velká částka"],
-      description: "Společnost založená před méně než 6 měsíci získala zakázku nad 100M Kč."
-    },
-    {
-      id: 1002,
-      title: "Dodávka IT systému pro ministerstvo",
-      amount: 75000000,
-      date: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-      contractor: "Tech Solutions s.r.o.",
-      authority: "Ministerstvo financí",
-      category: "IT služby",
-      flags: ["bez výběrového řízení", "časová tíseň"],
-      description: "Zakázka zadána bez řádného výběrového řízení s odvoláním na výjimku."
-    },
-    {
-      id: 1003,
-      title: "Výstavba sportovní haly",
-      amount: 45000000,
-      date: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
-      contractor: "StavbyPlus a.s.",
-      authority: "Město Brno",
-      category: "stavebnictví",
-      flags: ["dodatky", "navýšení ceny"],
-      description: "Původní zakázka byla výrazně navýšena dodatky."
-    }
-  ];
-}
-
 // Funkce pro získání přesného názvu tabulky (case-sensitive)
 async function getExactTableName(tableName: string): Promise<string | null> {
   try {
@@ -135,12 +96,10 @@ export async function getNeobvykleSmlouvy(limit = 5) {
     const dbStatus = await isDatabaseInitialized();
     
     if (!dbStatus.ready) {
-      console.warn("Databáze není plně inicializovaná - vracím mockovaná data");
-      const mockData = getMockAnomalies();
+      console.warn("Databáze není plně inicializovaná");
       return { 
-        data: mockData, 
-        cached: false, 
-        mock: true, 
+        data: [], 
+        cached: false,
         dbStatus: {
           ready: false,
           message: `Databázové tabulky nejsou správně nastaveny. ${dbStatus.errorDetails || "Je potřeba spustit inicializaci databáze."}`
@@ -216,44 +175,21 @@ export async function getNeobvykleSmlouvy(limit = 5) {
       `;
       const priceIncreaseContracts = await prisma.$queryRawUnsafe(priceIncreaseQuery);
 
-      // 4. Pokud nemáme žádné anomálie (databáze je prázdná), přidáme ukázkové smlouvy
+      // Spojení všech anomálií
       let allAnomalies = [
         ...newCompanyBigContracts,
         ...noTenderContracts,
         ...priceIncreaseContracts
       ];
       
-      // Pokud nemáme žádné anomálie, přečteme alespoň pár běžných smluv z databáze
-      if (allAnomalies.length === 0) {
-        const recentContractsQuery = `
-          SELECT 
-            s.id,
-            s.nazev as title,
-            s.castka as amount,
-            s.datum as date,
-            s.dodavatel as contractor,
-            s.zadavatel as authority,
-            'Běžná smlouva' as category,
-            ARRAY['běžná smlouva']::text[] as flags,
-            'Standardní smlouva' as description
-          FROM "${tableMap.smlouva}" s
-          ORDER BY s.datum DESC
-          LIMIT 5
-        `;
-        
-        const recentContracts = await prisma.$queryRawUnsafe(recentContractsQuery);
-        allAnomalies = [...recentContracts];
-      }
-      
-      // A pokud stále nemáme žádné smlouvy, použijeme mock data
+      // Pokud nemáme žádné anomálie, vrátíme prázdné pole
       if (allAnomalies.length === 0) {
         return { 
-          data: getMockAnomalies(), 
-          cached: false, 
-          mock: true,
+          data: [], 
+          cached: false,
           dbStatus: {
             ready: true,
-            message: "Databáze je připravena, ale neobsahuje žádná data."
+            message: "Databáze je připravena, ale nebyla nalezena žádná data odpovídající kritériím pro neobvyklé zakázky."
           }
         };
       }
@@ -275,11 +211,9 @@ export async function getNeobvykleSmlouvy(limit = 5) {
       };
     } catch (dbError) {
       console.error("Chyba při dotazování do databáze:", dbError);
-      const mockData = getMockAnomalies();
       return { 
-        data: mockData, 
-        cached: false, 
-        mock: true, 
+        data: [], 
+        cached: false,
         error: dbError instanceof Error ? dbError.message : String(dbError),
         dbStatus: {
           ready: false,
@@ -290,12 +224,9 @@ export async function getNeobvykleSmlouvy(limit = 5) {
     }
   } catch (error) {
     console.error("Chyba při načítání neobvyklých zakázek:", error);
-    // V případě jakékoli chyby vracíme mock data jako fallback
-    const mockData = getMockAnomalies();
     return { 
-      data: mockData, 
-      cached: false, 
-      mock: true, 
+      data: [], 
+      cached: false,
       error: (error as Error).message,
       dbStatus: {
         ready: false,
