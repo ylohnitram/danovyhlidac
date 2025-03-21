@@ -15,7 +15,7 @@ import { AlertTriangle, ExternalLink, Loader2, CheckCircle, XCircle } from "luci
 
 async function checkDatabaseStatus() {
   try {
-    const response = await fetch('/api/debug/db-status', {
+    const response = await fetch('/api/admin/db-status', {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json'
@@ -41,7 +41,7 @@ async function checkDatabaseStatus() {
 async function initializeDatabase() {
   try {
     // Volání na API endpoint pro setup databáze
-    const response = await fetch('/api/debug/db-setup', {
+    const response = await fetch('/api/admin/db-setup', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
