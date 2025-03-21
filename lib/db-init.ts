@@ -16,24 +16,35 @@ if (process.env.NODE_ENV !== 'production') {
   prisma = (global as any).prisma;
 }
 
+// Function to check if a table exists (case-insensitive)
+async function checkTableExists(tableName: string): Promise<boolean> {
+  try {
+    // Use a raw SQL query to check table existence case-insensitively
+    const result = await prisma!.$queryRaw`
+      SELECT 1 FROM pg_tables 
+      WHERE schemaname='public' 
+      AND LOWER(tablename)=LOWER(${tableName})
+    `;
+    
+    return Array.isArray(result) && result.length > 0;
+  } catch (error) {
+    console.error(`Error checking table existence for ${tableName}:`, error);
+    return false;
+  }
+}
+
 // Function to check if the database is initialized
 export async function isDatabaseInitialized(): Promise<boolean> {
   try {
-    // Try a simple query to check if the table exists
-    await prisma!.smlouva.findFirst({
-      select: { id: true },
-      take: 1
-    });
-    return true;
-  } catch (error) {
-    // Check if it's a "table does not exist" error
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError && 
-      (error.code === 'P2010' || error.message.includes('does not exist'))
-    ) {
-      return false;
-    }
+    // Check if all required tables exist with case-insensitive comparison
+    const smlouvaExists = await checkTableExists('smlouva');
+    const dodavatelExists = await checkTableExists('dodavatel');
+    const dodatekExists = await checkTableExists('dodatek');
+    const podnetExists = await checkTableExists('podnet');
     
+    // Database is initialized if all tables exist
+    return smlouvaExists && dodavatelExists && dodatekExists && podnetExists;
+  } catch (error) {
     // For other errors, just log and return false
     console.error('Error checking database initialization:', error);
     return false;
@@ -46,34 +57,37 @@ export async function getDatabaseStatus(): Promise<{
   connected: boolean;
   error?: string;
   message?: string;
+  tables?: { name: string; exists: boolean }[];
 }> {
   try {
     // First check if we can connect to the database at all
     await prisma!.$connect();
     
-    // Then check if the tables exist
-    try {
-      await prisma!.smlouva.findFirst({ select: { id: true }, take: 1 });
-      
+    // Then check the existence of each table
+    const tables = [
+      { name: 'smlouva', exists: await checkTableExists('smlouva') },
+      { name: 'dodavatel', exists: await checkTableExists('dodavatel') },
+      { name: 'dodatek', exists: await checkTableExists('dodatek') },
+      { name: 'podnet', exists: await checkTableExists('podnet') }
+    ];
+    
+    const allExist = tables.every(t => t.exists);
+    
+    if (allExist) {
       return {
         initialized: true,
         connected: true,
-        message: "Database is fully initialized"
+        message: "Database is fully initialized",
+        tables
       };
-    } catch (tableError) {
-      if (
-        tableError instanceof Prisma.PrismaClientKnownRequestError && 
-        (tableError.code === 'P2010' || tableError.message.includes('does not exist'))
-      ) {
-        return {
-          initialized: false,
-          connected: true,
-          error: tableError.message,
-          message: "Database is connected, but tables are not created. Please run migrations."
-        };
-      }
-      
-      throw tableError; // Re-throw unexpected errors
+    } else {
+      const missingTables = tables.filter(t => !t.exists).map(t => t.name).join(', ');
+      return {
+        initialized: false,
+        connected: true,
+        message: `Database is connected, but some tables are missing: ${missingTables}. Please run migrations.`,
+        tables
+      };
     }
   } catch (error) {
     // Handle connection errors

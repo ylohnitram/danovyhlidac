@@ -1,7 +1,7 @@
 "use server"
 
 import { getCachedStats, cacheStats } from "@/lib/cache"
-import { prisma, isDatabaseInitialized } from "@/lib/db-init"
+import { prisma } from "@/lib/db-init"
 
 // Typy anomálií, které detekujeme
 const ANOMALY_TYPES = {
@@ -51,6 +51,40 @@ function getMockAnomalies() {
   ];
 }
 
+// Funkce pro ověření, zda existuje tabulka (case-insensitive)
+async function checkTableExists(tableName: string): Promise<boolean> {
+  try {
+    // Použijeme SQL dotaz přímo s malým písmem u názvu tabulky
+    const result = await prisma.$queryRaw`
+      SELECT 1 FROM pg_tables 
+      WHERE schemaname='public' 
+      AND LOWER(tablename)=LOWER(${tableName})
+    `;
+    
+    return Array.isArray(result) && result.length > 0;
+  } catch (error) {
+    console.error(`Chyba při ověřování existence tabulky ${tableName}:`, error);
+    return false;
+  }
+}
+
+// Funkce pro ověření, zda je databáze správně inicializována
+async function isDatabaseInitialized(): Promise<boolean> {
+  try {
+    // Ověříme, zda existují všechny potřebné tabulky
+    const smlouvaExists = await checkTableExists('smlouva');
+    const dodavatelExists = await checkTableExists('dodavatel');
+    const dodatekExists = await checkTableExists('dodatek');
+    const podnetExists = await checkTableExists('podnet');
+    
+    // Databáze je inicializována, pokud existují všechny tabulky
+    return smlouvaExists && dodavatelExists && dodatekExists && podnetExists;
+  } catch (error) {
+    console.error('Chyba při kontrole inicializace databáze:', error);
+    return false;
+  }
+}
+
 export async function getNeobvykleSmlouvy(limit = 5) {
   try {
     // Zkusit načíst z cache
@@ -71,13 +105,15 @@ export async function getNeobvykleSmlouvy(limit = 5) {
         mock: true, 
         dbStatus: {
           ready: false,
-          message: "Databázové tabulky nejsou vytvořeny. Je potřeba spustit migrace."
+          message: "Databázové tabulky nejsou vytvořeny nebo jsou nekonzistentní. Je potřeba spustit migrace."
         } 
       };
     }
 
     try {
-      // 1. Nová firma s velkou zakázkou (bezpečně ošetřeno proti chybě, když tabulka neexistuje)
+      // Použijeme raw SQL dotazy s přesnými názvy tabulek v lowercase, jak je očekává Postgres
+      
+      // 1. Nová firma s velkou zakázkou
       const newCompanyBigContracts = await prisma.$queryRaw`
         SELECT 
           s.id,
@@ -89,8 +125,8 @@ export async function getNeobvykleSmlouvy(limit = 5) {
           'IT služby' as category,
           ARRAY['nová firma', 'malá firma', 'velká částka']::text[] as flags,
           'Společnost založená před méně než 6 měsíci získala zakázku nad 10M Kč.' as description
-        FROM smlouva s
-        JOIN dodavatel d ON s.dodavatel = d.nazev
+        FROM "smlouva" s
+        JOIN "dodavatel" d ON s.dodavatel = d.nazev
         WHERE d.datum_zalozeni > NOW() - INTERVAL '6 months'
         AND s.castka > 10000000
         LIMIT 5
@@ -108,7 +144,7 @@ export async function getNeobvykleSmlouvy(limit = 5) {
           'Stavební práce' as category,
           ARRAY['bez výběrového řízení', 'časová tíseň']::text[] as flags,
           'Zakázka zadána bez řádného výběrového řízení s odvoláním na výjimku.' as description
-        FROM smlouva s
+        FROM "smlouva" s
         WHERE s.typ_rizeni = 'bez výběrového řízení'
         AND s.castka > 5000000
         LIMIT 5
@@ -126,9 +162,9 @@ export async function getNeobvykleSmlouvy(limit = 5) {
           'Stavební práce' as category,
           ARRAY['dodatky', 'navýšení ceny']::text[] as flags,
           'Původní zakázka byla výrazně navýšena dodatky.' as description
-        FROM smlouva s
+        FROM "smlouva" s
         WHERE EXISTS (
-          SELECT 1 FROM dodatek d 
+          SELECT 1 FROM "dodatek" d 
           WHERE d.smlouva_id = s.id 
           GROUP BY d.smlouva_id
           HAVING SUM(d.castka) > s.castka * 0.3
@@ -156,7 +192,6 @@ export async function getNeobvykleSmlouvy(limit = 5) {
         } 
       };
     } catch (dbError) {
-      // Pokud nastane chyba při dotazech, vracíme mock data
       console.error("Chyba při dotazování do databáze:", dbError);
       const mockData = getMockAnomalies();
       return { 
@@ -166,7 +201,7 @@ export async function getNeobvykleSmlouvy(limit = 5) {
         error: dbError.message,
         dbStatus: {
           ready: false,
-          message: "Došlo k chybě při dotazování do databáze."
+          message: "Došlo k chybě při dotazování do databáze: " + dbError.message
         }
       };
     }
@@ -181,7 +216,7 @@ export async function getNeobvykleSmlouvy(limit = 5) {
       error: (error as Error).message,
       dbStatus: {
         ready: false,
-        message: "Neočekávaná chyba při načítání dat."
+        message: "Neočekávaná chyba při načítání dat: " + (error as Error).message
       }
     };
   }
