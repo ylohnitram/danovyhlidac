@@ -162,7 +162,7 @@ export default function UnusualContracts() {
                 className="text-amber-800 hover:text-amber-900 hover:bg-amber-100 p-0 h-auto"
                 asChild
               >
-                <a href={`https://smlouvy.gov.cz/smlouva/${contract.id}`} target="_blank" rel="noopener noreferrer">
+                <a href={contract.odkaz} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="h-4 w-4 mr-1" />
                   <span>Zobrazit detail v registru smluv</span>
                 </a>
