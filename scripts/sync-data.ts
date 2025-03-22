@@ -518,7 +518,31 @@ async function ensureDatabaseSchema(tableNames: Record<string, string>) {
   }
 }
 
-// Transform XML data to database format with direct extraction
+// Helper function to extract the first value from an array or return undefined
+// Enhanced to better handle nested structures
+function extractFirstValue(value: any): string | undefined {
+  if (!value) return undefined;
+  
+  if (Array.isArray(value)) {
+    if (value.length === 0) return undefined;
+    
+    const firstItem = value[0];
+    if (firstItem && typeof firstItem === 'object' && firstItem._) {
+      // Handle case where value is an array of objects with "_" property
+      return firstItem._.toString();
+    }
+    return firstItem?.toString();
+  }
+  
+  // Handle case where value is an object with "_" property (common in XML parsing)
+  if (typeof value === 'object' && value._) {
+    return value._.toString();
+  }
+  
+  return value?.toString();
+}
+
+// Transform XML data to database format with enhanced external_id extraction
 function transformContractData(record: any): ContractData | null {
   try {
     // Check if this is a 'zaznam' record with smlouva inside
@@ -526,6 +550,7 @@ function transformContractData(record: any): ContractData | null {
     
     if (CONFIG.DEBUG) {
       console.log('Contract structure keys:', Object.keys(contract));
+      console.log('Record structure keys:', Object.keys(record));
     }
     
     // Extract basic data
@@ -562,20 +587,58 @@ function transformContractData(record: any): ContractData | null {
                       extractFirstValue(contract.kategorie) || 
                       'ostatni';
     
-    // Extract external ID from identifikator - prioritize idVerze
+    // ENHANCED EXTERNAL ID EXTRACTION
+    // Look in multiple possible locations for idVerze based on actual XML structure
     let externalId: string | undefined = undefined;
     
-    if (record.identifikator) {
-      if (record.identifikator.idVerze) {
-        externalId = extractFirstValue(record.identifikator.idVerze);
-        if (CONFIG.DEBUG) console.log(`Found idVerze: ${externalId}`);
-      } else if (record.identifikator.idSmlouvy) {
-        externalId = extractFirstValue(record.identifikator.idSmlouvy);
-        if (CONFIG.DEBUG) console.log(`Using idSmlouvy: ${externalId}`);
-      }
-    } else if (record.id) {
+    // Debug the structure to help diagnose issues
+    if (CONFIG.DEBUG) {
+      console.log('Looking for idVerze...');
+      if (record.identifikator) console.log('record.identifikator exists:', record.identifikator);
+      if (contract.identifikator) console.log('contract.identifikator exists:', contract.identifikator);
+      if (record.idVerze) console.log('record.idVerze exists:', record.idVerze);
+      if (contract.idVerze) console.log('contract.idVerze exists:', contract.idVerze);
+    }
+
+    // First check in record.identifikator.idVerze (original location)
+    if (record.identifikator && record.identifikator.idVerze) {
+      externalId = extractFirstValue(record.identifikator.idVerze);
+      if (CONFIG.DEBUG) console.log(`Found idVerze in record.identifikator.idVerze: ${externalId}`);
+    }
+    // Then check if idVerze is directly in the record
+    else if (record.idVerze) {
+      externalId = extractFirstValue(record.idVerze);
+      if (CONFIG.DEBUG) console.log(`Found idVerze directly in record: ${externalId}`);
+    }
+    // Check if it's in the contract object
+    else if (contract.idVerze) {
+      externalId = extractFirstValue(contract.idVerze);
+      if (CONFIG.DEBUG) console.log(`Found idVerze in contract: ${externalId}`);
+    }
+    // Check if it's in contract.identifikator
+    else if (contract.identifikator && contract.identifikator.idVerze) {
+      externalId = extractFirstValue(contract.identifikator.idVerze);
+      if (CONFIG.DEBUG) console.log(`Found idVerze in contract.identifikator.idVerze: ${externalId}`);
+    }
+    // If still not found, check for idSmlouvy as backup
+    else if (record.identifikator && record.identifikator.idSmlouvy) {
+      externalId = extractFirstValue(record.identifikator.idSmlouvy);
+      if (CONFIG.DEBUG) console.log(`Using idSmlouvy from record.identifikator: ${externalId}`);
+    }
+    else if (contract.identifikator && contract.identifikator.idSmlouvy) {
+      externalId = extractFirstValue(contract.identifikator.idSmlouvy);
+      if (CONFIG.DEBUG) console.log(`Using idSmlouvy from contract.identifikator: ${externalId}`);
+    }
+    // Finally, fall back to record.id if present
+    else if (record.id) {
       externalId = extractFirstValue(record.id);
-      if (CONFIG.DEBUG) console.log(`Using direct id: ${externalId}`);
+      if (CONFIG.DEBUG) console.log(`Using direct record.id: ${externalId}`);
+    }
+    
+    // If no ID was found and DEBUG is enabled, dump some data to help diagnose
+    if (!externalId && CONFIG.DEBUG) {
+      console.log('WARNING: No external ID found for contract. Record dump:');
+      console.log(JSON.stringify(record, null, 2).substring(0, 1000) + '...');
     }
     
     // Direct extraction of parties from XML structure
@@ -628,7 +691,7 @@ function transformContractData(record: any): ContractData | null {
       zadavatel,
       zadavatel_adresa: zadavatelAdresa,
       typ_rizeni,
-      external_id: externalId,
+      external_id: externalId, // This should now be properly extracted
       lat: undefined,
       lng: undefined,
     };
@@ -901,6 +964,7 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
   const dodavatelTable = tableNames.dodavatel || 'dodavatel';
   let insertedCount = 0;
   let skippedCount = 0;
+  let updatedCount = 0;
   let errorCount = 0;
   
   try {
@@ -919,7 +983,7 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
         const createTableQuery = `
           CREATE TABLE IF NOT EXISTS "${dodavatelTable}" (
             "nazev" TEXT PRIMARY KEY,
-            "ico" TEXT,
+            "ico" TEXT UNIQUE,
             "datum_zalozeni" TIMESTAMP(3),
             "pocet_zamestnancu" INTEGER,
             "created_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
@@ -934,7 +998,8 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
       console.error(`CRITICAL ERROR: Failed to ensure ${dodavatelTable} table exists:`, e);
       return { 
         inserted: 0, 
-        skipped: 0, 
+        skipped: 0,
+        updated: 0,
         error: true, 
         message: `Failed to ensure ${dodavatelTable} table exists: ${e instanceof Error ? e.message : String(e)}` 
       };
@@ -966,18 +1031,18 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
           idsToUse = dbIds;
         } else {
           console.log('No suitable contracts found in database');
-          return { inserted: 0, skipped: 0, errors: 0 };
+          return { inserted: 0, skipped: 0, updated: 0, errors: 0 };
         }
       } catch (e) {
         console.error('Error fetching contract IDs from database:', e);
-        return { inserted: 0, skipped: 0, errors: 0 };
+        return { inserted: 0, skipped: 0, updated: 0, errors: 0 };
       }
     }
     
     // If we still have no IDs, skip
     if (idsToUse.length === 0) {
       console.log('No contract IDs available for supplier extraction');
-      return { inserted: 0, skipped: 0, errors: 0 };
+      return { inserted: 0, skipped: 0, updated: 0, errors: 0 };
     }
     
     console.log(`Using ${idsToUse.length} contract IDs for supplier extraction`);
@@ -1001,6 +1066,7 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
       return { 
         inserted: 0, 
         skipped: 0, 
+        updated: 0,
         error: true, 
         message: `Error fetching suppliers: ${e instanceof Error ? e.message : String(e)}` 
       };
@@ -1015,6 +1081,7 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
       
       let batchInserted = 0;
       let batchSkipped = 0;
+      let batchUpdated = 0;
       let batchErrors = 0;
       
       for (const supplier of batch) {
@@ -1028,41 +1095,108 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
         }
         
         try {
-          // Check if supplier already exists
-          const checkQuery = `
-            SELECT COUNT(*) AS count FROM "${dodavatelTable}" 
+          // Enhanced check: Check if supplier already exists by name OR by ICO
+          let existingSupplier = null;
+          let existsBy = '';
+          
+          // Check by name first
+          const checkByNameQuery = `
+            SELECT nazev, ico FROM "${dodavatelTable}" 
             WHERE nazev = $1
+            LIMIT 1
           `;
           
-          const existsResult = await prisma.$queryRawUnsafe(checkQuery, supplierName);
-          const existsCount = Array.isArray(existsResult) && existsResult.length > 0 ? Number(existsResult[0].count) : 0;
+          const nameResult = await prisma.$queryRawUnsafe(checkByNameQuery, supplierName);
+          if (Array.isArray(nameResult) && nameResult.length > 0) {
+            existingSupplier = nameResult[0];
+            existsBy = 'name';
+          }
           
-          if (existsCount > 0) {
-            if (CONFIG.DEBUG) {
-              console.log(`Supplier "${supplierName}" already exists, skipping`);
-            }
+          // If not found by name, and we have an ICO, check by ICO
+          if (!existingSupplier && supplierIco) {
+            const checkByIcoQuery = `
+              SELECT nazev, ico FROM "${dodavatelTable}" 
+              WHERE ico = $1
+              LIMIT 1
+            `;
             
-            skippedCount++;
-            batchSkipped++;
+            const icoResult = await prisma.$queryRawUnsafe(checkByIcoQuery, supplierIco);
+            if (Array.isArray(icoResult) && icoResult.length > 0) {
+              existingSupplier = icoResult[0];
+              existsBy = 'ico';
+            }
+          }
+          
+          // Handle based on what we found
+          if (existingSupplier) {
+            if (existsBy === 'name') {
+              // Already exists with same name
+              if (CONFIG.DEBUG) {
+                console.log(`Supplier "${supplierName}" already exists by name, skipping`);
+              }
+              skippedCount++;
+              batchSkipped++;
+            } 
+            else if (existsBy === 'ico') {
+              // Already exists with same ICO but different name - update the record
+              if (CONFIG.DEBUG) {
+                console.log(`Supplier with ICO "${supplierIco}" already exists with name "${existingSupplier.nazev}", updating details if needed`);
+              }
+              
+              // Update the existing record with any new info
+              const updateQuery = `
+                UPDATE "${dodavatelTable}"
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE ico = $1
+              `;
+              
+              await prisma.$executeRawUnsafe(updateQuery, supplierIco);
+              
+              updatedCount++;
+              batchUpdated++;
+            }
             continue;
           }
           
-          // Insert the supplier with actual data
+          // If supplier doesn't exist, insert with conflict handling
           const currentDate = new Date();
-          const insertQuery = `
-            INSERT INTO "${dodavatelTable}" (
-              nazev, 
-              ico, 
-              datum_zalozeni, 
-              created_at, 
-              updated_at
-            ) VALUES (
-              $1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-            )
-            ON CONFLICT (nazev) DO NOTHING
-          `;
           
-          await prisma.$executeRawUnsafe(insertQuery, supplierName, supplierIco || null, currentDate);
+          // Use ON CONFLICT to properly handle unique constraint violations
+          const insertQuery = supplierIco ? 
+            // If we have an ICO, use it in the ON CONFLICT clause
+            `
+              INSERT INTO "${dodavatelTable}" (
+                nazev, 
+                ico, 
+                datum_zalozeni, 
+                created_at, 
+                updated_at
+              ) VALUES (
+                $1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+              )
+              ON CONFLICT (ico) DO NOTHING
+            `
+            :
+            // Without ICO, just use name
+            `
+              INSERT INTO "${dodavatelTable}" (
+                nazev, 
+                ico, 
+                datum_zalozeni, 
+                created_at, 
+                updated_at
+              ) VALUES (
+                $1, NULL, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+              )
+              ON CONFLICT (nazev) DO NOTHING
+            `;
+          
+          // Execute the query with the right parameters
+          if (supplierIco) {
+            await prisma.$executeRawUnsafe(insertQuery, supplierName, supplierIco, currentDate);
+          } else {
+            await prisma.$executeRawUnsafe(insertQuery, supplierName, currentDate);
+          }
           
           if (CONFIG.DEBUG) {
             console.log(`Inserted supplier "${supplierName}" with ICO ${supplierIco || 'unknown'}`);
@@ -1071,13 +1205,14 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
           insertedCount++;
           batchInserted++;
         } catch (e) {
-          console.error(`Error inserting supplier "${supplierName}":`, e);
+          // Log error but continue processing other suppliers
+          console.error(`Error processing supplier "${supplierName}" with ICO "${supplierIco}":`, e);
           errorCount++;
           batchErrors++;
         }
       }
       
-      console.log(`Supplier batch complete: ${batchInserted} inserted, ${batchSkipped} skipped, ${batchErrors} errors`);
+      console.log(`Supplier batch complete: ${batchInserted} inserted, ${batchUpdated} updated, ${batchSkipped} skipped, ${batchErrors} errors`);
     }
     
     // 4. Verify results
@@ -1092,10 +1227,11 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
       console.error(`Error getting final count from ${dodavatelTable}:`, e);
     }
     
-    console.log(`Supplier extraction summary: ${insertedCount} inserted, ${skippedCount} skipped, ${errorCount} errors`);
+    console.log(`Supplier extraction summary: ${insertedCount} inserted, ${updatedCount} updated, ${skippedCount} skipped, ${errorCount} errors`);
     
     return { 
       inserted: insertedCount, 
+      updated: updatedCount,
       skipped: skippedCount, 
       errors: errorCount,
       finalCount
@@ -1104,6 +1240,7 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
     console.error('Unexpected error in extractSuppliers:', e);
     return { 
       inserted: 0, 
+      updated: 0,
       skipped: 0, 
       error: true, 
       message: `Unexpected error in extractSuppliers: ${e instanceof Error ? e.message : String(e)}` 
