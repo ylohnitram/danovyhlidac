@@ -125,7 +125,7 @@ export async function getNeobvykleSmlouvy(limit = 5) {
           'IT služby' as category,
           ARRAY['nová firma', 'malá firma', 'velká částka']::text[] as flags,
           'Společnost založená před méně než 6 měsíci získala zakázku nad 10M Kč.' as description,
-          CONCAT('https://smlouvy.gov.cz/smlouva/', s.id) as odkaz
+          CONCAT('https://smlouvy.gov.cz/smlouva/', COALESCE(s.external_id, s.id::text)) as odkaz
         FROM "${tableMap.smlouva}" s
         JOIN "${tableMap.dodavatel}" d ON s.dodavatel = d.nazev
         WHERE d.datum_zalozeni > NOW() - INTERVAL '6 months'
@@ -146,7 +146,7 @@ export async function getNeobvykleSmlouvy(limit = 5) {
           'Stavební práce' as category,
           ARRAY['bez výběrového řízení', 'časová tíseň']::text[] as flags,
           'Zakázka zadána bez řádného výběrového řízení s odvoláním na výjimku.' as description,
-          CONCAT('https://smlouvy.gov.cz/smlouva/', s.id) as odkaz
+          CONCAT('https://smlouvy.gov.cz/smlouva/', COALESCE(s.external_id, s.id::text)) as odkaz
         FROM "${tableMap.smlouva}" s
         WHERE s.typ_rizeni = 'bez výběrového řízení'
         AND s.castka > 5000000
@@ -166,7 +166,7 @@ export async function getNeobvykleSmlouvy(limit = 5) {
           'Stavební práce' as category,
           ARRAY['dodatky', 'navýšení ceny']::text[] as flags,
           'Původní zakázka byla výrazně navýšena dodatky.' as description,
-          CONCAT('https://smlouvy.gov.cz/smlouva/', s.id) as odkaz
+          CONCAT('https://smlouvy.gov.cz/smlouva/', COALESCE(s.external_id, s.id::text)) as odkaz
         FROM "${tableMap.smlouva}" s
         WHERE EXISTS (
           SELECT 1 FROM "${tableMap.dodatek}" d 

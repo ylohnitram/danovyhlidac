@@ -10,7 +10,8 @@
     "sync-data": "ts-node --project tsconfig.scripts.json scripts/sync-data.ts",
     "sync-data:diag": "ts-node --project tsconfig.scripts.json scripts/sync-data-diag.ts",
     "db-check": "ts-node --project tsconfig.scripts.json scripts/db-check.ts",
-    "setup-db": "ts-node --project tsconfig.scripts.json scripts/setup-db.ts"
+    "setup-db": "ts-node --project tsconfig.scripts.json scripts/setup-db.ts",
+    "migrate-external-id": "ts-node --project tsconfig.scripts.json scripts/migrate-add-external-id.ts"
   },
   "dependencies": {
     "@emotion/is-prop-valid": "latest",

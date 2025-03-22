@@ -62,6 +62,7 @@ interface ContractData {
   dodavatel: string;
   zadavatel: string;
   typ_rizeni: string;
+  external_id?: string;
   lat?: number;
   lng?: number;
 }
@@ -603,7 +604,15 @@ function transformContractData(record: any): ContractData | null {
     const kategorie = extractFirstValue(contract.typSmlouvy) || 
                       extractFirstValue(contract.kategorie) || 
                       'ostatni';
-    
+   
+    // Extract external ID
+    let externalId = null;
+    if (record.identifikator) {
+      externalId = extractFirstValue(record.identifikator);
+    } else if (record.id) {
+      externalId = extractFirstValue(record.id);
+    }
+
     // NOVÝ PŘÍSTUP: Použijeme skórovací systém pro rozpoznání rolí
     
     // Definujeme kandidáty pro role
@@ -1065,6 +1074,9 @@ function transformContractData(record: any): ContractData | null {
       dodavatel,
       zadavatel,
       typ_rizeni,
+      external_id: externalId,
+      lat,
+      lng,
     };
   } catch (error) {
     console.error('Error transforming contract data:', error);
@@ -1197,7 +1209,7 @@ async function processContractBatch(
       
       // Create or update the contract using raw queries
       if (existingContract) {
-        const updateQuery = `
+	const updateQuery = `
           UPDATE "${smlouvaTable}" SET
             nazev = $1,
             castka = $2,
@@ -1208,8 +1220,9 @@ async function processContractBatch(
             typ_rizeni = $7,
             lat = $8,
             lng = $9,
+            external_id = $10,
             updated_at = CURRENT_TIMESTAMP
-          WHERE id = $10
+          WHERE id = $11
           RETURNING id
         `;
         
@@ -1221,6 +1234,7 @@ async function processContractBatch(
           contractData.dodavatel,
           contractData.zadavatel,
           contractData.typ_rizeni,
+	  contractData.external_id || null,
           contractData.lat || null,
           contractData.lng || null,
           existingContract.id
@@ -1258,12 +1272,12 @@ async function processContractBatch(
           safePoint.errorContracts++;
         }
       } else {
-        const insertQuery = `
+	const insertQuery = `
           INSERT INTO "${smlouvaTable}" (
             nazev, castka, kategorie, datum, dodavatel, zadavatel, 
-            typ_rizeni, lat, lng, created_at, updated_at
+            typ_rizeni, lat, lng, external_id, created_at, updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           )
           RETURNING id
         `;
@@ -1276,6 +1290,7 @@ async function processContractBatch(
           contractData.dodavatel,
           contractData.zadavatel,
           contractData.typ_rizeni,
+	  contractData.external_id || null,
           contractData.lat || null,
           contractData.lng || null
         ];

@@ -16,6 +16,7 @@ model Smlouva {
   dodavatel   String
   zadavatel   String
   typ_rizeni  String?  @default("standardní")
+  external_id String?
   lat         Float?
   lng         Float?
   podnety     Podnet[]
