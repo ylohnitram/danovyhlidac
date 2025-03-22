@@ -1998,6 +1998,43 @@ async function getExactTableNames(): Promise<Record<string, string>> {
   }
 }
 
+// Direct execution functions for individual phases
+export async function directlyExtractSuppliers(): Promise<any> {
+  try {
+    console.log('Starting direct supplier extraction...');
+    
+    // Get table names
+    const tableNames = await getExactTableNames();
+    
+    // Run the extraction with empty IDs array (will force fallback behavior)
+    const result = await extractSuppliersFromBatch(tableNames, []);
+    
+    console.log('Direct supplier extraction complete');
+    return result;
+  } catch (error) {
+    console.error('Error in direct supplier extraction:', error);
+    return { error: true, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function directlyCreateAmendments(): Promise<any> {
+  try {
+    console.log('Starting direct amendment creation...');
+    
+    // Get table names
+    const tableNames = await getExactTableNames();
+    
+    // Run the amendment creation with empty IDs array (will force fallback behavior)
+    const result = await createAmendmentsForBatch(tableNames, []);
+    
+    console.log('Direct amendment creation complete');
+    return result;
+  } catch (error) {
+    console.error('Error in direct amendment creation:', error);
+    return { error: true, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 // Main synchronization function - now with batch processing and safe points
 export async function syncData() {
   console.log('Starting data synchronization from open data dumps...')
@@ -2054,319 +2091,4 @@ export async function syncData() {
   // Process each month
   for (const { year, month } of remainingMonths) {
     // Skip if this month is already completed
-    const monthIsComplete = safePoint.processedMonths.find(
-        m => m.year === year && m.month === month && m.completed
-      );
-      
-      if (monthIsComplete) {
-        console.log(`Skipping ${year}-${month} as it was already processed`);
-        continue;
-      }
-      
-      try {
-        // Update safe-point
-        safePoint.currentMonth = { year, month };
-        saveSafePoint(safePoint);
-        
-        // Download and parse the XML dump
-        const filePath = await downloadXmlDump(year, month)
-        const records = await parseXmlDump(filePath)
-        
-        console.log(`Processing ${records.length} records for ${year}-${month}...`);
-        
-        // Update total records in safePoint
-        safePoint.totalRecords += records.length;
-        saveSafePoint(safePoint);
-        
-        // Process records in batches
-        const batchSize = CONFIG.BATCH_SIZES.CONTRACTS;
-        
-        // Continue from the last batch if interrupted
-        const startBatch = safePoint.currentMonth?.year === year && 
-                            safePoint.currentMonth?.month === month 
-                            ? safePoint.currentBatch : 0;
-        
-        // Track contract IDs for this entire month
-        let monthContractIds: number[] = [];
-        
-        for (let batchStart = startBatch * batchSize; batchStart < records.length; batchStart += batchSize) {
-          // Update current batch
-          safePoint.currentBatch = Math.floor(batchStart / batchSize);
-          saveSafePoint(safePoint);
-          
-          console.log(`\n== Processing batch ${safePoint.currentBatch + 1}/${Math.ceil(records.length/batchSize)} for ${year}-${month} ==`);
-          
-          try {
-            // Process a batch of contracts
-            if (CONFIG.PHASES.IMPORT_CONTRACTS) {
-              const batchResult = await processContractBatch(
-                records, 
-                batchStart, 
-                batchSize, 
-                smlouvaTable,
-                safePoint
-              );
-              
-              // Update statistics
-              totalNewCount += batchResult.newCount;
-              totalUpdatedCount += batchResult.updatedCount;
-              totalSkippedCount += batchResult.skippedCount;
-              totalErrorCount += batchResult.errorCount;
-              
-              // Add contract IDs to the month collection
-              if (batchResult.contractIds && batchResult.contractIds.length > 0) {
-                monthContractIds = [...monthContractIds, ...batchResult.contractIds];
-                console.log(`Collected ${batchResult.contractIds.length} contract IDs from this batch, total: ${monthContractIds.length}`);
-              }
-              
-              // Extract suppliers for this batch if we have a significant number of IDs
-              if (CONFIG.PHASES.EXTRACT_SUPPLIERS && batchResult.contractIds.length > 0 && 
-                 (batchResult.contractIds.length >= 50 || batchStart + batchSize >= records.length)) {
-                console.log(`Extracting suppliers for ${batchResult.contractIds.length} contracts...`);
-                const supplierResult = await extractSuppliersFromBatch(tableNames, batchResult.contractIds);
-                totalSuppliers += supplierResult.inserted || 0;
-                safePoint.extractedSuppliers += supplierResult.inserted || 0;
-              }
-              
-              // Create amendments for this batch if we have a significant number of IDs
-              if (CONFIG.PHASES.CREATE_AMENDMENTS && batchResult.contractIds.length > 0 &&
-                 (batchResult.contractIds.length >= 50 || batchStart + batchSize >= records.length)) {
-                console.log(`Creating amendments for ${batchResult.contractIds.length} contracts...`);
-                const amendmentResult = await createAmendmentsForBatch(tableNames, batchResult.contractIds);
-                totalAmendments += amendmentResult.inserted || 0;
-                safePoint.createdAmendments += amendmentResult.inserted || 0;
-              }
-            } else {
-              console.log('Skipping contract import phase (disabled in config)');
-            }
-            
-            // Save progress after each batch
-            saveSafePoint(safePoint);
-            
-          } catch (batchError) {
-            console.error(`Error processing batch ${safePoint.currentBatch + 1} for ${year}-${month}:`, batchError);
-            safePoint.errors.push(`Batch ${safePoint.currentBatch + 1} error: ${batchError instanceof Error ? batchError.message : String(batchError)}`);
-            saveSafePoint(safePoint);
-            
-            // Continue with the next batch
-            continue;
-          }
-          
-          // Log progress after each batch
-          console.log(`\nProgress: ${safePoint.processedRecords}/${safePoint.totalRecords} records processed (${Math.round(safePoint.processedRecords/safePoint.totalRecords*100)}%)`);
-          console.log(`Contracts: ${safePoint.newContracts} new, ${safePoint.updatedContracts} updated, ${safePoint.skippedContracts} skipped, ${safePoint.errorContracts} errors`);
-          console.log(`Suppliers: ${safePoint.extractedSuppliers} extracted`);
-          console.log(`Amendments: ${safePoint.createdAmendments} created`);
-        }
-        
-        // After processing all batches for the month, process any remaining contract IDs
-        if (CONFIG.PHASES.EXTRACT_SUPPLIERS && monthContractIds.length > 0) {
-          console.log(`\n== Extracting suppliers for all ${monthContractIds.length} contracts collected this month ==`);
-          const supplierResult = await extractSuppliersFromBatch(tableNames, monthContractIds);
-          totalSuppliers += supplierResult.inserted || 0;
-          safePoint.extractedSuppliers += supplierResult.inserted || 0;
-          saveSafePoint(safePoint);
-        }
-        
-        if (CONFIG.PHASES.CREATE_AMENDMENTS && monthContractIds.length > 0) {
-          console.log(`\n== Creating amendments for all ${monthContractIds.length} contracts collected this month ==`);
-          const amendmentResult = await createAmendmentsForBatch(tableNames, monthContractIds);
-          totalAmendments += amendmentResult.inserted || 0;
-          safePoint.createdAmendments += amendmentResult.inserted || 0;
-          saveSafePoint(safePoint);
-        }
-        
-        // Mark this month as completed
-        safePoint.processedMonths.push({
-          year,
-          month,
-          completed: true
-        });
-        
-        // Add to collected contract IDs
-        if (Array.isArray(safePoint.collectedContractIds)) {
-          const uniqueIds = monthContractIds.filter(id => !safePoint.collectedContractIds.includes(id));
-          if (uniqueIds.length > 0) {
-            safePoint.collectedContractIds = [...safePoint.collectedContractIds, ...uniqueIds];
-            console.log(`Added ${uniqueIds.length} unique contract IDs to safe-point collection`);
-          }
-        }
-        
-        // Reset currentBatch for the next month
-        safePoint.currentBatch = 0;
-        saveSafePoint(safePoint);
-        
-      } catch (monthError) {
-        console.error(`Error processing data for ${year}-${month}:`, monthError);
-        safePoint.errors.push(`Month ${year}-${month} error: ${monthError instanceof Error ? monthError.message : String(monthError)}`);
-        saveSafePoint(safePoint);
-        
-        // Continue with the next month
-        continue;
-      }
-    }
-    
-    // After processing all months, make sure we run supplier and amendment phases if needed
-    if (CONFIG.PHASES.EXTRACT_SUPPLIERS && 
-        (CONFIG.FORCE_EXTRACT_SUPPLIERS || (safePoint.collectedContractIds && safePoint.collectedContractIds.length > 0))) {
-      console.log(`\n== Final supplier extraction phase ==`);
-      const contractIds = safePoint.collectedContractIds || [];
-      console.log(`Using ${contractIds.length} collected contract IDs from this run`);
-      const supplierResult = await extractSuppliersFromBatch(tableNames, contractIds);
-      totalSuppliers += supplierResult.inserted || 0;
-      safePoint.extractedSuppliers += supplierResult.inserted || 0;
-      saveSafePoint(safePoint);
-    }
-    
-    if (CONFIG.PHASES.CREATE_AMENDMENTS && 
-        (CONFIG.FORCE_CREATE_AMENDMENTS || (safePoint.collectedContractIds && safePoint.collectedContractIds.length > 0))) {
-      console.log(`\n== Final amendment creation phase ==`);
-      const contractIds = safePoint.collectedContractIds || [];
-      console.log(`Using ${contractIds.length} collected contract IDs from this run`);
-      const amendmentResult = await createAmendmentsForBatch(tableNames, contractIds);
-      totalAmendments += amendmentResult.inserted || 0;
-      safePoint.createdAmendments += amendmentResult.inserted || 0;
-      saveSafePoint(safePoint);
-    }
-    
-    // Final diagnostic check
-    console.log('\n=== Running final diagnostic check ===');
-    await diagnosticCheck(tableNames);
-    
-    // Mark sync as complete
-    safePoint.isComplete = true;
-    safePoint.currentMonth = null;
-    safePoint.currentBatch = 0;
-    saveSafePoint(safePoint);
-    
-    const endTime = Date.now();
-    const duration = (endTime - startTime) / 1000;
-    
-    const summary = {
-      duration: `${duration} seconds`,
-      contracts: {
-        processed: safePoint.processedRecords,
-        new: safePoint.newContracts,
-        updated: safePoint.updatedContracts,
-        skipped: safePoint.skippedContracts,
-        errors: safePoint.errorContracts
-      },
-      suppliers: {
-        extracted: safePoint.extractedSuppliers
-      },
-      amendments: {
-        created: safePoint.createdAmendments
-      },
-      errors: safePoint.errors
-    };
-    
-    console.log(`\n=== Synchronization completed in ${duration} seconds ===`);
-    console.log(`Contract summary: ${safePoint.processedRecords} processed, ${safePoint.newContracts} new, ${safePoint.updatedContracts} updated, ${safePoint.skippedContracts} skipped, ${safePoint.errorContracts} errors`);
-    console.log(`Supplier extraction: ${safePoint.extractedSuppliers} suppliers added`);
-    console.log(`Amendment creation: ${safePoint.createdAmendments} amendments created`);
-    
-    if (safePoint.errors.length > 0) {
-      console.log(`\nEncountered ${safePoint.errors.length} errors during processing:`);
-      safePoint.errors.forEach((error, index) => {
-        console.log(`${index + 1}. ${error}`);
-      });
-    }
-    
-    return summary;
-    }
-    
-    // Direct execution functions for individual phases
-    export async function directlyExtractSuppliers(): Promise<any> {
-      try {
-        console.log('Starting direct supplier extraction...');
-        
-        // Get table names
-        const tableNames = await getExactTableNames();
-        
-        // Run the extraction with empty IDs array (will force fallback behavior)
-        const result = await extractSuppliersFromBatch(tableNames, []);
-        
-        console.log('Direct supplier extraction complete');
-        return result;
-      } catch (error) {
-        console.error('Error in direct supplier extraction:', error);
-        return { error: true, message: error instanceof Error ? error.message : String(error) };
-      }
-    }
-    
-    export async function directlyCreateAmendments(): Promise<any> {
-      try {
-        console.log('Starting direct amendment creation...');
-        
-        // Get table names
-        const tableNames = await getExactTableNames();
-        
-        // Run the amendment creation with empty IDs array (will force fallback behavior)
-        const result = await createAmendmentsForBatch(tableNames, []);
-        
-        console.log('Direct amendment creation complete');
-        return result;
-      } catch (error) {
-        console.error('Error in direct amendment creation:', error);
-        return { error: true, message: error instanceof Error ? error.message : String(error) };
-      }
-    }
-    
-    // Command line execution
-    if (require.main === module) {
-      (async () => {
-        try {
-          // Command line arguments
-          const args = process.argv.slice(2);
-          const command = args[0] || 'sync';
-    
-          // Check for reset flag
-          if (args.includes('--reset') || args.includes('-r')) {
-            console.log('Force resetting safe-point...');
-            process.env.FORCE_RESET_SAFEPOINT = 'true';
-          }
-    
-          // Check for debug flag
-          if (args.includes('--debug') || args.includes('-d')) {
-            console.log('Enabling debug mode...');
-            process.env.DEBUG = 'true';
-          }
-    
-          // Check for force supplier extraction flag
-          if (args.includes('--force-suppliers') || args.includes('-s')) {
-            console.log('Forcing supplier extraction...');
-            process.env.FORCE_EXTRACT_SUPPLIERS = 'true';
-          }
-    
-          // Check for force amendment creation flag
-          if (args.includes('--force-amendments') || args.includes('-a')) {
-            console.log('Forcing amendment creation...');
-            process.env.FORCE_CREATE_AMENDMENTS = 'true';
-          }
-    
-          switch (command) {
-            case 'suppliers':
-              console.log('Running supplier extraction only...');
-              await directlyExtractSuppliers();
-              break;
-            case 'amendments':
-              console.log('Running amendment creation only...');
-              await directlyCreateAmendments();
-              break;
-            case 'sync':
-            default:
-              console.log('Running full sync process...');
-              await syncData();
-              break;
-          }
-    
-          console.log('Process completed successfully');
-          process.exit(0);
-        } catch (error) {
-          console.error('Fatal error in main process:', error);
-          process.exit(1);
-        }
-      })();
-    }
-    
-    export default { syncData, directlyExtractSuppliers, directlyCreateAmendments };
+    const monthIsComplete

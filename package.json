@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "next lint",
     "sync-data": "ts-node --project tsconfig.scripts.json scripts/sync-data.ts",
-    "sync-data:cjs": "node scripts/sync-data.cjs"
+    "sync-data:diag": "ts-node --project tsconfig.scripts.json scripts/sync-data-diag.ts",
+    "db-check": "ts-node --project tsconfig.scripts.json scripts/db-check.ts",
+    "setup-db": "ts-node --project tsconfig.scripts.json scripts/setup-db.ts"
   },
   "dependencies": {
     "@emotion/is-prop-valid": "latest",
