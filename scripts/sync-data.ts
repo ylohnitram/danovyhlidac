@@ -60,19 +60,13 @@ interface ContractData {
   kategorie: string;
   datum: Date;
   dodavatel: string;
+  dodavatel_ico?: string;
   zadavatel: string;
+  zadavatel_adresa?: string;
   typ_rizeni: string;
   external_id?: string;
   lat?: number;
   lng?: number;
-}
-
-// Interface for contractParty to avoid 'any' types
-interface ContractParty {
-  nazev?: any[];
-  prijemce?: any[];
-  adresa?: any[];
-  [key: string]: any;
 }
 
 // Interface for safe-point tracking
@@ -406,172 +400,132 @@ function extractFirstValue(value: any): string | undefined {
   return value?.toString();
 }
 
-// Vylepšená funkce pro geocoding pomocí Nominatim API
+// Function for geocoding using Nominatim API 
 async function geocodeAddress(address: string | null, zadavatel: string | null): Promise<{ lat: number, lng: number } | null> {
   try {
-    // Pokud nemáme ani adresu ani zadavatele, nemůžeme nic dělat
+    // If we have no address or authority name, we can't geocode
     if (!address && !zadavatel) {
       if (CONFIG.DEBUG) console.log('Geocoding: No address or authority provided');
       return null;
     }
 
-    // Prioritizovat adresu, pokud je k dispozici, jinak použít město ze zadavatele
+    // Prioritize address for geocoding
     let searchQuery = '';
-    let querySource = '';
     
     if (address) {
-      // Vyčistit a normalizovat adresu
-      searchQuery = address.trim();
-      querySource = 'adresa';
-      
-      // Pokud je adresa příliš dlouhá, zkusit ji zjednodušit
-      if (searchQuery.length > 100) {
-        // Zkusit izolovat pouze PSČ a město
-        const pscMatch = searchQuery.match(/\b\d{3}\s?\d{2}\b/);
-        const simpleAddress = pscMatch ? 
-          searchQuery.substring(0, searchQuery.indexOf(pscMatch[0]) + pscMatch[0].length) : 
-          searchQuery.split(',')[0];
-        
-        if (simpleAddress && simpleAddress.length < searchQuery.length) {
-          searchQuery = simpleAddress;
-          if (CONFIG.DEBUG) console.log(`Geocoding: Simplified long address to "${searchQuery}"`);
-        }
-      }
+      searchQuery = `${address}, Česká republika`;
+      if (CONFIG.DEBUG) console.log(`Geocoding using address: "${address}"`);
     } else if (zadavatel) {
-      querySource = 'zadavatel';
-      // Rozšířená extrakce města ze zadavatele s více vzory
-      const patterns = [
-        // Standardní vzory pro města a obce
-        /(?:(?:Město|Obec|Magistrát města|Městský úřad|MÚ)\s+)([A-ZÁ-Ž][a-zá-ž]+(?:[\s-][A-ZÁ-Ž][a-zá-ž]+)*)/i,
-        // Kraj v různých podobách
-        /([A-ZÁ-Ž][a-zá-ž]+(?:[\s-][A-ZÁ-Ž][a-zá-ž]+)*)\s+kraj/i,
-        // Extrakce něčeho, co vypadá jako město (slovo začínající velkým písmenem)
-        /\b([A-ZÁ-Ž][a-zá-ž]+(?:[\s-][A-ZÁ-Ž][a-zá-ž]+)*)\b/
-      ];
-
-      let cityName = null;
-      for (const pattern of patterns) {
-        const match = zadavatel.match(pattern);
-        if (match && match[1]) {
-          cityName = match[1];
-          if (CONFIG.DEBUG) console.log(`Geocoding: Found city ${cityName} using pattern`);
-          break;
-        }
-      }
-      
-      if (cityName) {
-        searchQuery = cityName;
-      } else {
-        // Poslední možnost - použít celý název zadavatele a doufat, že obsahuje něco užitečného
-        searchQuery = zadavatel;
-        if (CONFIG.DEBUG) console.log(`Geocoding: Using full authority name: "${zadavatel}"`);
-      }
+      searchQuery = `${zadavatel}, Česká republika`;
+      if (CONFIG.DEBUG) console.log(`Geocoding using authority: "${zadavatel}"`);
     }
     
-    // Přidat "Česká republika" k vyhledávání pro zlepšení přesnosti
-    searchQuery = `${searchQuery}, Česká republika`;
-    
-    if (CONFIG.DEBUG) console.log(`Geocoding: Final query: "${searchQuery}" (source: ${querySource})`);
-    
-    // Zpoždění, abychom respektovali omezení Nominatim API (max 1 požadavek za sekundu)
+    // Add delay to respect Nominatim API limits
     await new Promise(resolve => setTimeout(resolve, 1100));
     
-    // Volání Nominatim API
+    // Call Nominatim API
     const encodedQuery = encodeURIComponent(searchQuery);
     const url = `https://nominatim.openstreetmap.org/search?q=${encodedQuery}&format=json&limit=1&countrycodes=cz`;
     
-    // Vylepšený User-Agent - Nominatim doporučuje specifický formát s odkazem na projekt a kontaktem
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'DanovyHlidac/1.0 (https://danovyhlidac.cz; info@danovyhlidac.cz)',
         'Accept-Language': 'cs,en',
-        'From': 'info@danovyhlidac.cz'  // Přidáno pro lepší identifikaci
+        'From': 'info@danovyhlidac.cz'
       }
     });
     
     if (!response.ok) {
-      // Lepší diagnostické informace při selhání API
-      console.error(`Geocoding: Nominatim API responded with error: ${response.status} ${response.statusText}`);
-      
-      // Pokud je to omezení ze strany API, počkáme a zkusíme to znovu
-      if (response.status === 429) {
-        console.log("Geocoding: Too many requests, waiting 5 seconds...");
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        // Rekurzivní volání - zkusíme to znovu s menší úpravou dotazu
-        return await geocodeAddress(
-          address ? address + " " : null, 
-          zadavatel
-        );
-      }
-      
       throw new Error(`Nominatim API responded with status: ${response.status} - ${response.statusText}`);
     }
     
     const data = await response.json();
     
     if (Array.isArray(data) && data.length > 0) {
-      // Máme výsledek geocodingu
       const result = data[0];
-      
-      if (CONFIG.DEBUG) console.log(`Geocoding: Success! Found for "${searchQuery}": ${result.lat}, ${result.lon} (type: ${result.type})`);
       
       return {
         lat: parseFloat(result.lat),
         lng: parseFloat(result.lon)
       };
-    } else {
-      // Žádný výsledek, zkusíme alternativní přístup
-      if (CONFIG.DEBUG) console.log(`Geocoding: No results for "${searchQuery}"`);
-      
-      // Alternativní strategie pro různé zdroje
-      if (querySource === 'adresa' && zadavatel) {
-        if (CONFIG.DEBUG) console.log("Geocoding: Trying again with authority...");
-        return await geocodeAddress(null, zadavatel);
-      }
-      
-      if (querySource === 'zadavatel' && searchQuery.includes(',')) {
-        // Zkusíme jen první část před čárkou
-        const simplifiedQuery = searchQuery.split(',')[0];
-        if (CONFIG.DEBUG) console.log(`Geocoding: Trying simplified query "${simplifiedQuery}"`);
-        
-        // Rekurzivní volání s upraveným dotazem
-        return await geocodeAddress(simplifiedQuery, null);
-      }
-      
-      // Fallback: Vrátit přibližné souřadnice pro ČR, pokud vše ostatní selže
-      if (CONFIG.DEBUG) console.log("Geocoding: Using fallback coordinates for Czech Republic");
-      
-      // Přidáme větší odchylku pro reálnější rozložení bodů po mapě ČR
-      return {
-        // Střed ČR (přibližně) s malou náhodnou odchylkou v rámci ČR
-        lat: 49.8 + (Math.random() * 0.8 - 0.4),  // Rozsah cca 49.4 - 50.2
-        lng: 15.5 + (Math.random() * 2.0 - 1.0)   // Rozsah cca 14.5 - 16.5
-      };
     }
-  } catch (error) {
-    console.error(`Geocoding: Error geocoding "${address || zadavatel}":`, error);
     
-    // Fallback v případě chyby
-    return {
-      lat: 49.8 + (Math.random() * 0.8 - 0.4),
-      lng: 15.5 + (Math.random() * 2.0 - 1.0)
-    };
+    // If no results, return null
+    return null;
+  } catch (error) {
+    console.error(`Geocoding error:`, error);
+    return null;
   }
 }
 
-// Vylepšená funkce pro transformaci XML dat smlouvy do databázového formátu
+// Function to ensure the database has the necessary columns
+async function ensureDatabaseSchema(tableNames: Record<string, string>) {
+  try {
+    console.log('Checking database schema...');
+    const smlouvaTable = tableNames.smlouva || 'smlouva';
+    
+    // Check if the table exists
+    try {
+      await prisma.$executeRawUnsafe(`SELECT 1 FROM "${smlouvaTable}" LIMIT 1`);
+      console.log(`Table ${smlouvaTable} exists`);
+    } catch (e) {
+      console.error(`Table ${smlouvaTable} not found:`, e);
+      return;
+    }
+    
+    // Check if the columns exist
+    const columnsToCheck = ['dodavatel_ico', 'zadavatel_adresa'];
+    const columnsToAdd = [];
+    
+    for (const column of columnsToCheck) {
+      try {
+        // Check if the column exists
+        const checkQuery = `
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = '${smlouvaTable}' 
+          AND column_name = '${column}'
+        `;
+        
+        const result = await prisma.$queryRawUnsafe(checkQuery);
+        const exists = Array.isArray(result) && result.length > 0;
+        
+        if (!exists) {
+          columnsToAdd.push(column);
+        }
+      } catch (e) {
+        console.error(`Error checking column ${column}:`, e);
+      }
+    }
+    
+    // Add missing columns
+    if (columnsToAdd.length > 0) {
+      console.log(`Adding missing columns to ${smlouvaTable}: ${columnsToAdd.join(', ')}`);
+      
+      for (const column of columnsToAdd) {
+        try {
+          const alterQuery = `ALTER TABLE "${smlouvaTable}" ADD COLUMN IF NOT EXISTS "${column}" TEXT`;
+          await prisma.$executeRawUnsafe(alterQuery);
+          console.log(`Added column ${column}`);
+        } catch (e) {
+          console.error(`Error adding column ${column}:`, e);
+        }
+      }
+    } else {
+      console.log('All required columns already exist');
+    }
+  } catch (e) {
+    console.error('Error checking database schema:', e);
+  }
+}
+
+// Transform XML data to database format with direct extraction
 function transformContractData(record: any): ContractData | null {
   try {
     // Check if this is a 'zaznam' record with smlouva inside
     const contract = record.smlouva ? record.smlouva[0] : record;
     
-    // Log the contract structure in debug mode
     if (CONFIG.DEBUG) {
       console.log('Contract structure keys:', Object.keys(contract));
-      if (record.identifikator) {
-        console.log('Identifikator structure:', record.identifikator);
-      }
     }
     
     // Extract basic data
@@ -607,495 +561,51 @@ function transformContractData(record: any): ContractData | null {
     const kategorie = extractFirstValue(contract.typSmlouvy) || 
                       extractFirstValue(contract.kategorie) || 
                       'ostatni';
-   
-    // Extract external ID - improved version that handles nested structure
+    
+    // Extract external ID from identifikator - prioritize idVerze
     let externalId: string | undefined = undefined;
-    try {
-      if (record.identifikator) {
-        // Debug the structure
-        if (CONFIG.DEBUG) {
-          console.log('Identifikator structure:', JSON.stringify(record.identifikator, null, 2));
-        }
-        
-        // Extract idSmlouvy (contract ID) from the identifikator
-        if (record.identifikator.idSmlouvy) {
-          externalId = extractFirstValue(record.identifikator.idSmlouvy);
-          if (CONFIG.DEBUG) {
-            console.log(`Extracted idSmlouvy: ${externalId}`);
-          }
-        } 
-        // If no idSmlouvy, try idVerze (version ID)
-        else if (record.identifikator.idVerze) {
-          externalId = extractFirstValue(record.identifikator.idVerze);
-          if (CONFIG.DEBUG) {
-            console.log(`Extracted idVerze: ${externalId}`);
-          }
-        }
-        // If identifikator doesn't have the expected structure, log it for debugging
-        else if (CONFIG.DEBUG) {
-          console.log('Identifikator doesn\'t have expected structure:', record.identifikator);
-        }
-      }
-      
-      // If we still don't have an ID and there's a direct ID property, use that
-      if (!externalId && record.id) {
-        externalId = extractFirstValue(record.id);
-        if (CONFIG.DEBUG) {
-          console.log(`Extracted direct ID: ${externalId}`);
-        }
-      }
-      
-      // Final safeguard against object type
-      if (externalId && typeof externalId === 'object') {
-        console.warn('External ID is an object, not a string:', externalId);
-        externalId = undefined;
-      }
-    } catch (error) {
-      console.error("Error extracting external ID:", error);
-      externalId = undefined;
-    }
-
-    // NOVÝ PŘÍSTUP: Použijeme skórovací systém pro rozpoznání rolí
     
-    // Definujeme kandidáty pro role
-    type PartyCandidate = {
-      name: string;  // Název strany
-      authorityScore: number;  // Skóre pro roli "zadavatel"
-      supplierScore: number;   // Skóre pro roli "dodavatel"
-      role?: string | null;  // Explicitní role, pokud je známa - opraveno pro null
-      isPublicEntity: boolean;  // Příznak, zda se jedná o veřejnou instituci
-      explicitRole: boolean;    // Jestli byla role určena explicitně
-    };
-    
-    const partyCandidates: PartyCandidate[] = [];
-    
-    // 1. Nejprve zkontrolujeme "subjekt", který často obsahuje jasné role
-    if (contract.subjekt && Array.isArray(contract.subjekt)) {
-      if (CONFIG.DEBUG) {
-        console.log(`Found ${contract.subjekt.length} subjects`);
+    if (record.identifikator) {
+      if (record.identifikator.idVerze) {
+        externalId = extractFirstValue(record.identifikator.idVerze);
+        if (CONFIG.DEBUG) console.log(`Found idVerze: ${externalId}`);
+      } else if (record.identifikator.idSmlouvy) {
+        externalId = extractFirstValue(record.identifikator.idSmlouvy);
+        if (CONFIG.DEBUG) console.log(`Using idSmlouvy: ${externalId}`);
       }
-      
-      // Projdeme všechny subjekty a určíme skóre
-      for (const subj of contract.subjekt) {
-        const name = extractFirstValue(subj.nazev) || 'Neuvedeno';
-        const typ = extractFirstValue(subj.typ) || '';
-        
-        // Výchozí skóre
-        let authScore = 0;
-        let supplierScore = 0;
-        let explicitRole: string | null = null;
-        let isExplicit = false;
-        
-        // Kontrola typu subjektu pro explicitní role
-        if (typ) {
-          const typLower = typ.toLowerCase();
-          
-          if (typLower.includes('zadavatel') || typLower.includes('objednatel') || 
-              typLower.includes('kupující') || typLower.includes('objednávající')) {
-            authScore += 150;  // Velmi vysoké skóre pro explicitní roli
-            explicitRole = 'zadavatel';
-            isExplicit = true;
-          } else if (typLower.includes('dodavatel') || typLower.includes('poskytovatel') || 
-                    typLower.includes('zhotovitel') || typLower.includes('prodávající')) {
-            supplierScore += 150;  // Velmi vysoké skóre pro explicitní roli
-            explicitRole = 'dodavatel';
-            isExplicit = true;
-          }
-        }
-        
-        // Kontrola podle názvu pro veřejné instituce
-        const nameLower = name.toLowerCase();
-        const isPublicEntity = 
-          nameLower.includes('ministerstvo') ||
-          nameLower.includes('úřad') ||
-          nameLower.includes('magistrát') ||
-          nameLower.includes('městský') ||
-          nameLower.includes('obecní') ||
-          nameLower.includes('kraj') ||
-          nameLower.includes('město ') ||
-          nameLower.includes('obec ') ||
-          nameLower.includes('státní') ||
-          nameLower.includes('česká republika') ||
-          nameLower.includes('ředitelství') ||
-          /krajsk[áý]/i.test(nameLower) ||
-          /městsk[áý]/i.test(nameLower) ||
-          /obecn[íý]/i.test(nameLower) ||
-          /státn[íý]/i.test(nameLower);
-        
-        // Přidáme skóre podle typu entity
-        if (isPublicEntity) {
-          authScore += 70;  // Veřejné instituce jsou pravděpodobněji zadavatelé
-        } else {
-          supplierScore += 40;  // Neveřejné subjekty jsou pravděpodobněji dodavatelé
-        }
-        
-        // Kontrola podle právní formy
-        if (nameLower.includes('s.r.o.') || nameLower.includes('a.s.') || 
-            nameLower.includes('spol. s r.o.') || nameLower.includes('s. r. o.') ||
-            nameLower.includes('akciová společnost') || nameLower.includes('společnost s ručením')) {
-          supplierScore += 30;  // Firmy jsou pravděpodobněji dodavatelé
-        }
-        
-        // Kontrola ICO, pokud existuje
-        if (subj.ico) {
-          // Nic konkrétního, ale máme informaci, že subjekt má IČO
-          if (CONFIG.DEBUG) {
-            console.log(`Subject ${name} has IČO ${extractFirstValue(subj.ico)}`);
-          }
-        }
-        
-        // Přidáme kandidáta do seznamu
-        partyCandidates.push({
-          name,
-          authorityScore: authScore,
-          supplierScore: supplierScore,
-          role: explicitRole,
-          isPublicEntity,
-          explicitRole: isExplicit
-        });
-      }
+    } else if (record.id) {
+      externalId = extractFirstValue(record.id);
+      if (CONFIG.DEBUG) console.log(`Using direct id: ${externalId}`);
     }
     
-    // 2. Zkontrolujeme "smluvniStrana", který obsahuje detailnější informace o stranách
-    if (contract.smluvniStrana && Array.isArray(contract.smluvniStrana)) {
-      if (CONFIG.DEBUG) {
-        console.log(`Found ${contract.smluvniStrana.length} contractual parties`);
-      }
-      
-      // Projdeme všechny smluvní strany
-      for (const strana of contract.smluvniStrana) {
-        const name = extractFirstValue(strana.nazev) || 'Neuvedeno';
-        
-        // Výchozí skóre
-        let authScore = 0;
-        let supplierScore = 0;
-        let explicitRole: string | null = null;
-        let isExplicit = false;
-        
-        // Kontrola explicitních rolí
-        if (strana.role) {
-          const roleLower = extractFirstValue(strana.role)?.toLowerCase() || '';
-          if (roleLower.includes('zadavatel') || roleLower.includes('objednatel') ||
-              roleLower.includes('kupující') || roleLower.includes('objednávající')) {
-            authScore += 150;
-            explicitRole = 'zadavatel';
-            isExplicit = true;
-          } else if (roleLower.includes('dodavatel') || roleLower.includes('poskytovatel') || 
-                    roleLower.includes('zhotovitel') || roleLower.includes('prodávající')) {
-            supplierScore += 150;
-            explicitRole = 'dodavatel';
-            isExplicit = true;
-          }
-        }
-        
-        // Kontrola příznaku "prijemce"
-        if (strana.prijemce) {
-          const prijemce = extractFirstValue(strana.prijemce);
-          if (prijemce === 'true' || prijemce === '1') {
-            supplierScore += 100;  // Příjemce je pravděpodobně dodavatel
-            explicitRole = explicitRole || 'dodavatel';
-            isExplicit = true;
-          }
-        }
-        
-        // Kontrola podle názvu pro veřejné instituce
-        const nameLower = name.toLowerCase();
-        const isPublicEntity = 
-          nameLower.includes('ministerstvo') ||
-          nameLower.includes('úřad') ||
-          nameLower.includes('magistrát') ||
-          nameLower.includes('městský') ||
-          nameLower.includes('obecní') ||
-          nameLower.includes('kraj') ||
-          nameLower.includes('město ') ||
-          nameLower.includes('obec ') ||
-          nameLower.includes('státní') ||
-          nameLower.includes('česká republika') ||
-          nameLower.includes('ředitelství') ||
-          /krajsk[áý]/i.test(nameLower) ||
-          /městsk[áý]/i.test(nameLower) ||
-          /obecn[íý]/i.test(nameLower) ||
-          /státn[íý]/i.test(nameLower);
-        
-        // Přidáme skóre podle typu entity
-        if (isPublicEntity) {
-          authScore += 70;  // Veřejné instituce jsou pravděpodobněji zadavatelé
-        } else {
-          supplierScore += 40;  // Neveřejné subjekty jsou pravděpodobněji dodavatelé
-        }
-        
-        // Kontrola podle právní formy
-        if (nameLower.includes('s.r.o.') || nameLower.includes('a.s.') || 
-            nameLower.includes('spol. s r.o.') || nameLower.includes('s. r. o.') ||
-            nameLower.includes('akciová společnost') || nameLower.includes('společnost s ručením')) {
-          supplierScore += 30;  // Firmy jsou pravděpodobněji dodavatelé
-        }
-        
-        // Kontrola e-mailových domén (veřejná správa často používá .cz)
-        if (strana.email) {
-          const email = extractFirstValue(strana.email);
-          if (email) {
-            if (email.endsWith('.gov.cz') || email.endsWith('.muni.cz') || 
-                email.endsWith('-mucs.cz') || email.endsWith('.mesto.cz')) {
-              authScore += 20;  // Pravděpodobně veřejná instituce
-            }
-          }
-        }
-        
-        // Hledáme stejného kandidáta v již existujících kandidátech
-        const existingCandidate = partyCandidates.find(c => c.name === name);
-        
-        if (existingCandidate) {
-          // Aktualizujeme skóre existujícího kandidáta
-          existingCandidate.authorityScore += authScore;
-          existingCandidate.supplierScore += supplierScore;
-          if (explicitRole) existingCandidate.role = explicitRole;
-          if (isExplicit) existingCandidate.explicitRole = true;
-        } else {
-          // Přidáme nového kandidáta
-          partyCandidates.push({
-            name,
-            authorityScore: authScore,
-            supplierScore: supplierScore,
-            role: explicitRole,
-            isPublicEntity,
-            explicitRole: isExplicit
-          });
-        }
-      }
-    }
-    
-    // 3. Přidáme informace z pole "schvalil", které často obsahuje zadavatele
-    if (contract.schvalil) {
-      const schvalil = extractFirstValue(contract.schvalil);
-      if (schvalil) {
-        // Kontrola, zda už nemáme tohoto kandidáta
-        const existingCandidate = partyCandidates.find(c => c.name === schvalil);
-        
-        if (existingCandidate) {
-          existingCandidate.authorityScore += 50;  // Schvalovatel je pravděpodobněji zadavatel
-        } else {
-          // Přidáme nového kandidáta
-          partyCandidates.push({
-            name: schvalil,
-            authorityScore: 50,
-            supplierScore: 0,
-            isPublicEntity: false,  // Nemáme dostatek informací, ale často to bývá fyzická osoba
-            explicitRole: false,
-            role: null // Přidáno explicitně null pro typovou kompatibilitu
-          });
-        }
-      }
-    }
-    
-    // 4. Přímá pole "dodavatel" a "zadavatel", pokud existují
-    if (contract.dodavatel) {
-      let dodavatelName;
-      
-      if (typeof contract.dodavatel[0] === 'object') {
-        dodavatelName = extractFirstValue(contract.dodavatel[0].nazev) || 'Neuvedeno';
-      } else {
-        dodavatelName = extractFirstValue(contract.dodavatel) || 'Neuvedeno';
-      }
-      
-      // Kontrola, zda už nemáme tohoto kandidáta
-      const existingCandidate = partyCandidates.find(c => c.name === dodavatelName);
-      
-      if (existingCandidate) {
-        existingCandidate.supplierScore += 150;  // Velmi vysoké skóre pro přímé pole
-        existingCandidate.role = 'dodavatel';
-        existingCandidate.explicitRole = true;
-      } else {
-        // Přidáme nového kandidáta
-        partyCandidates.push({
-          name: dodavatelName,
-          authorityScore: 0,
-          supplierScore: 150,
-          role: 'dodavatel',
-          isPublicEntity: false,  // Předpokládáme, že není veřejný subjekt
-          explicitRole: true
-        });
-      }
-    }
-    
-    if (contract.zadavatel) {
-      let zadavatelName;
-      
-      if (typeof contract.zadavatel[0] === 'object') {
-        zadavatelName = extractFirstValue(contract.zadavatel[0].nazev) || 'Neuvedeno';
-      } else {
-        zadavatelName = extractFirstValue(contract.zadavatel) || 'Neuvedeno';
-      }
-      
-      // Kontrola, zda už nemáme tohoto kandidáta
-      const existingCandidate = partyCandidates.find(c => c.name === zadavatelName);
-      
-      if (existingCandidate) {
-        existingCandidate.authorityScore += 150;  // Velmi vysoké skóre pro přímé pole
-        existingCandidate.role = 'zadavatel';
-        existingCandidate.explicitRole = true;
-      } else {
-        // Přidáme nového kandidáta
-        partyCandidates.push({
-          name: zadavatelName,
-          authorityScore: 150,
-          supplierScore: 0,
-          role: 'zadavatel',
-          isPublicEntity: true,  // Předpokládáme, že je veřejný subjekt
-          explicitRole: true
-        });
-      }
-    }
-    
-    // Print all candidates for debugging
-    if (CONFIG.DEBUG) {
-      console.log("Party candidates for the contract:");
-      partyCandidates.forEach(c => {
-        console.log(`- ${c.name}: Authority=${c.authorityScore}, Supplier=${c.supplierScore}, Role=${c.role}, IsPublic=${c.isPublicEntity}`);
-      });
-    }
-    
-    // Vybrat nejlepší kandidáty podle skóre
+    // Direct extraction of parties from XML structure
     let zadavatel = 'Neuvedeno';
+    let zadavatelAdresa: string | undefined = undefined;
     let dodavatel = 'Neuvedeno';
+    let dodavatelIco: string | undefined = undefined;
     
-    // Seřazení kandidátů podle skóre pro každou roli
-    const zadavatelCandidates = [...partyCandidates].sort((a, b) => b.authorityScore - a.authorityScore);
-    const dodavatelCandidates = [...partyCandidates].sort((a, b) => b.supplierScore - a.supplierScore);
-    
-    // 1. Nejprve zkusíme explicitní role (ty s konkrétní rolí podle typu/role pole)
-    const explicitZadavatel = partyCandidates.find(c => c.role === 'zadavatel' && c.explicitRole);
-    const explicitDodavatel = partyCandidates.find(c => c.role === 'dodavatel' && c.explicitRole);
-    
-    if (explicitZadavatel) {
-      zadavatel = explicitZadavatel.name;
-    } else if (zadavatelCandidates.length > 0 && zadavatelCandidates[0].authorityScore > 0) {
-      zadavatel = zadavatelCandidates[0].name;
-    }
-    
-    if (explicitDodavatel) {
-      dodavatel = explicitDodavatel.name;
-    } else if (dodavatelCandidates.length > 0 && dodavatelCandidates[0].supplierScore > 0) {
-      dodavatel = dodavatelCandidates[0].name;
-    }
-    
-    // 2. Kontrola pro případ, že máme jen dvě strany a jednu jsme už určili
-    if (partyCandidates.length === 2) {
-      if (zadavatel !== 'Neuvedeno' && dodavatel === 'Neuvedeno') {
-        // Našli jsme zadavatele, ale ne dodavatele - druhá strana musí být dodavatel
-        const otherParty = partyCandidates.find(c => c.name !== zadavatel);
-        if (otherParty) {
-          dodavatel = otherParty.name;
-        }
-      } else if (zadavatel === 'Neuvedeno' && dodavatel !== 'Neuvedeno') {
-        // Našli jsme dodavatele, ale ne zadavatele - druhá strana musí být zadavatel
-        const otherParty = partyCandidates.find(c => c.name !== dodavatel);
-        if (otherParty) {
-          zadavatel = otherParty.name;
-        }
-      }
-    }
-    
-    // 3. Poslední pokus - pokud máme jen jednu stranu a nic jsme neurčili
-    if (partyCandidates.length === 1 && zadavatel === 'Neuvedeno' && dodavatel === 'Neuvedeno') {
-      const onlyParty = partyCandidates[0];
+    // Extract client/authority from subjekt element
+    if (contract.subjekt && Array.isArray(contract.subjekt) && contract.subjekt.length > 0) {
+      const client = contract.subjekt[0];
+      zadavatel = extractFirstValue(client.nazev) || 'Neuvedeno';
+      zadavatelAdresa = extractFirstValue(client.adresa);
       
-      if (onlyParty.isPublicEntity) {
-        zadavatel = onlyParty.name;
-      } else {
-        dodavatel = onlyParty.name;
-      }
-    }
-    
-    // 4. Kontrola, zda jsme nenašli stejnou stranu pro obě role
-    if (zadavatel === dodavatel && zadavatel !== 'Neuvedeno') {
       if (CONFIG.DEBUG) {
-        console.warn(`WARNING: Same party identified for both roles: ${zadavatel}`);
-      }
-      
-      // Pokud máme více kandidátů, zkusíme najít dalšího nejlepšího dodavatele
-      if (dodavatelCandidates.length > 1) {
-        const nextBestSupplier = dodavatelCandidates.find(c => c.name !== zadavatel);
-        if (nextBestSupplier) {
-          dodavatel = nextBestSupplier.name;
-        }
-      }
-      
-      // Pokud stále máme problém, zkusíme použít veřejný subjekt jako zadavatele a ostatní jako dodavatele
-      if (zadavatel === dodavatel) {
-        const publicEntity = partyCandidates.find(c => c.isPublicEntity);
-        const privateEntity = partyCandidates.find(c => !c.isPublicEntity);
-        
-        if (publicEntity && privateEntity) {
-          zadavatel = publicEntity.name;
-          dodavatel = privateEntity.name;
-        }
-      }
-      
-      // Pokud stále máme konflikt a máme aspoň dva kandidáty
-      if (zadavatel === dodavatel && partyCandidates.length >= 2) {
-        // Použijeme první dva kandidáty podle abecedy (poslední možnost)
-        const sortedCandidates = [...partyCandidates].sort((a, b) => a.name.localeCompare(b.name));
-        zadavatel = sortedCandidates[0].name;
-        dodavatel = sortedCandidates[1].name;
-        
-        if (CONFIG.DEBUG) {
-          console.warn(`CRITICAL ROLE CONFLICT: Using first two candidates: Authority=${zadavatel}, Supplier=${dodavatel}`);
-        }
+        console.log(`From subjekt - Zadavatel: ${zadavatel}`);
+        console.log(`From subjekt - Adresa: ${zadavatelAdresa || 'undefined'}`);
       }
     }
     
-    // 5. Speciální úprava pro případ, že máme osobní jméno jako schvalovatele
-    if (zadavatel.includes('schváleno:')) {
-      // Extrakce jména
-      const personalNameMatch = zadavatel.match(/schváleno:\s*(.*)/);
-      const personalName = personalNameMatch ? personalNameMatch[1].trim() : zadavatel;
+    // Extract contractor from smluvniStrana element
+    if (contract.smluvniStrana && Array.isArray(contract.smluvniStrana) && contract.smluvniStrana.length > 0) {
+      const contractor = contract.smluvniStrana[0];
+      dodavatel = extractFirstValue(contractor.nazev) || 'Neuvedeno';
+      dodavatelIco = extractFirstValue(contractor.ico);
       
-      // Pokud máme jen osobní jméno jako zadavatele a žádného dodavatele, musíme to napravit
-      if (dodavatel === 'Neuvedeno') {
-        // Hledáme instituci mezi kandidáty
-        const institutionCandidate = partyCandidates.find(c => 
-          c.name !== personalName && 
-          (c.isPublicEntity || c.name.includes(' a.s.') || c.name.includes(' s.r.o.'))
-        );
-        
-        if (institutionCandidate) {
-          if (institutionCandidate.isPublicEntity) {
-            zadavatel = institutionCandidate.name;
-            // Pokud máme ještě nějakého kandidáta, použijeme ho jako dodavatele
-            const anotherCandidate = partyCandidates.find(c => 
-              c.name !== personalName && c.name !== institutionCandidate.name
-            );
-            if (anotherCandidate) {
-              dodavatel = anotherCandidate.name;
-            }
-          } else {
-            // Institucionální subjekt je spíše dodavatel, osoba je schvalovatel
-            dodavatel = institutionCandidate.name;
-          }
-        }
-      }
-    }
-    
-    // 6. Finální dvojitá kontrola - veřejná instituce by měla být vždy zadavatel
-    const publicZadavatel = isPublicEntityByName(zadavatel);
-    const publicDodavatel = isPublicEntityByName(dodavatel);
-    
-    // Pokud jen dodavatel vypadá jako veřejná instituce a zadavatel ne, prohodíme je
-    if (!publicZadavatel && publicDodavatel && zadavatel !== 'Neuvedeno' && dodavatel !== 'Neuvedeno') {
       if (CONFIG.DEBUG) {
-        console.warn(`CORRECTION: Swapping roles - authority "${zadavatel}" looks like a private entity, but supplier "${dodavatel}" looks like a public entity`);
+        console.log(`From smluvniStrana - Dodavatel: ${dodavatel}`);
+        console.log(`From smluvniStrana - ICO: ${dodavatelIco || 'undefined'}`);
       }
-      
-      // Prohodíme hodnoty
-      const temp = zadavatel;
-      zadavatel = dodavatel;
-      dodavatel = temp;
-    }
-    
-    // Log the final result
-    if (CONFIG.DEBUG) {
-      console.log(`Final role determination - Authority: "${zadavatel}", Supplier: "${dodavatel}"`);
     }
     
     // Get tender type
@@ -1114,7 +624,9 @@ function transformContractData(record: any): ContractData | null {
       kategorie,
       datum,
       dodavatel,
+      dodavatel_ico: dodavatelIco,
       zadavatel,
+      zadavatel_adresa: zadavatelAdresa,
       typ_rizeni,
       external_id: externalId,
       lat: undefined,
@@ -1124,30 +636,6 @@ function transformContractData(record: any): ContractData | null {
     console.error('Error transforming contract data:', error);
     return null;
   }
-}
-
-// Pomocná funkce pro kontrolu jestli subjekt vypadá jako veřejná instituce podle jména
-function isPublicEntityByName(name: string): boolean {
-  if (name === 'Neuvedeno') return false;
-  
-  const nameLower = name.toLowerCase();
-  return (
-    nameLower.includes('ministerstvo') ||
-    nameLower.includes('úřad') ||
-    nameLower.includes('magistrát') ||
-    nameLower.includes('městský') ||
-    nameLower.includes('obecní') ||
-    nameLower.includes('kraj') ||
-    nameLower.includes('město ') ||
-    nameLower.includes('obec ') ||
-    nameLower.includes('státní') ||
-    nameLower.includes('česká republika') ||
-    nameLower.includes('ředitelství') ||
-    /krajsk[áý]/i.test(nameLower) ||
-    /městsk[áý]/i.test(nameLower) ||
-    /obecn[íý]/i.test(nameLower) ||
-    /státn[íý]/i.test(nameLower)
-  );
 }
 
 // Function to process a batch of contracts and insert/update them in the database
@@ -1193,19 +681,30 @@ async function processContractBatch(
         continue;
       }
       
-      // Generate a unique identifier using contract attributes
-      let contractId: string | undefined = undefined;
-      
-      // Try to extract the contract ID from the record
-      if (record.identifikator) {
-        contractId = extractFirstValue(record.identifikator);
-      }
-      
-      // Check if the contract already exists by ID or attributes
+      // Check if the contract already exists by external ID or attributes
       let existingContract: { id: number, lat?: number, lng?: number } | null = null;
       
-      if (contractId) {
-        // First try to find by attributes to check if it exists
+      if (contractData.external_id) {
+        // First try to find by external ID
+        const findByIdQuery = `
+          SELECT id, lat, lng FROM "${smlouvaTable}" 
+          WHERE external_id = $1
+          LIMIT 1
+        `;
+        
+        try {
+          const result = await prisma.$queryRawUnsafe(findByIdQuery, contractData.external_id);
+          const resultArray = result as Array<{ id: number, lat?: number, lng?: number }>;
+          if (resultArray.length > 0) {
+            existingContract = resultArray[0];
+          }
+        } catch (findError) {
+          console.error(`Error finding existing contract by ID:`, findError);
+        }
+      }
+      
+      // If not found by ID, try to find by attributes
+      if (!existingContract) {
         const findQuery = `
           SELECT id, lat, lng FROM "${smlouvaTable}" 
           WHERE nazev = $1 
@@ -1225,46 +724,46 @@ async function processContractBatch(
         
         try {
           const result = await prisma.$queryRawUnsafe(findQuery, ...params);
-          // Properly check if the result is an array with at least one element
           const resultArray = result as Array<{ id: number, lat?: number, lng?: number }>;
           if (resultArray.length > 0) {
             existingContract = resultArray[0];
           }
         } catch (findError) {
-          console.error(`Error finding existing contract:`, findError);
+          console.error(`Error finding existing contract by attributes:`, findError);
         }
       }
       
       // Add geolocation if we don't have it
       if (!existingContract?.lat || !existingContract?.lng) {
         try {
-          const geoData = await geocodeAddress(null, contractData.zadavatel);
+          const geoData = await geocodeAddress(contractData.zadavatel_adresa || null, contractData.zadavatel);
           if (geoData) {
             contractData.lat = geoData.lat;
             contractData.lng = geoData.lng;
           }
         } catch (geoError) {
           console.error(`Error geocoding for contract:`, geoError);
-          // Leave coordinates undefined - they will be set to NULL in the database
         }
       }
       
       // Create or update the contract using raw queries
       if (existingContract) {
-	const updateQuery = `
+        const updateQuery = `
           UPDATE "${smlouvaTable}" SET
             nazev = $1,
             castka = $2,
             kategorie = $3,
             datum = $4,
             dodavatel = $5,
-            zadavatel = $6,
-            typ_rizeni = $7,
-            external_id = $8,
-            lat = CASE WHEN $9::text = 'null' THEN NULL ELSE $9::double precision END,
-            lng = CASE WHEN $10::text = 'null' THEN NULL ELSE $10::double precision END,
+            dodavatel_ico = $6,
+            zadavatel = $7,
+            zadavatel_adresa = $8,
+            typ_rizeni = $9,
+            external_id = $10,
+            lat = CASE WHEN $11::text = 'null' THEN NULL ELSE $11::double precision END,
+            lng = CASE WHEN $12::text = 'null' THEN NULL ELSE $12::double precision END,
             updated_at = CURRENT_TIMESTAMP
-          WHERE id = $11
+          WHERE id = $13
           RETURNING id
         `;
 
@@ -1274,13 +773,13 @@ async function processContractBatch(
           contractData.kategorie,
           contractData.datum,
           contractData.dodavatel,
+          contractData.dodavatel_ico || null,
           contractData.zadavatel,
+          contractData.zadavatel_adresa || null,
           contractData.typ_rizeni,
-	  typeof contractData.external_id === 'object'
-    ? JSON.stringify(contractData.external_id)
-    : (contractData.external_id || null),
-	  typeof contractData.lat === 'number' ? contractData.lat : null,
-	  typeof contractData.lng === 'number' ? contractData.lng : null,
+          contractData.external_id || null,
+          typeof contractData.lat === 'number' ? contractData.lat : null,
+          typeof contractData.lng === 'number' ? contractData.lng : null,
           existingContract.id
         ];
         
@@ -1316,14 +815,14 @@ async function processContractBatch(
           safePoint.errorContracts++;
         }
       } else {
-	const insertQuery = `
+        const insertQuery = `
           INSERT INTO "${smlouvaTable}" (
-            nazev, castka, kategorie, datum, dodavatel, zadavatel, 
-            typ_rizeni, external_id, lat, lng, created_at, updated_at
+            nazev, castka, kategorie, datum, dodavatel, dodavatel_ico,
+            zadavatel, zadavatel_adresa, typ_rizeni, external_id, lat, lng, created_at, updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, 
-            CASE WHEN $9::text = 'null' THEN NULL ELSE $9::double precision END,
-            CASE WHEN $10::text = 'null' THEN NULL ELSE $10::double precision END,
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 
+            CASE WHEN $11::text = 'null' THEN NULL ELSE $11::double precision END,
+            CASE WHEN $12::text = 'null' THEN NULL ELSE $12::double precision END,
             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           )
           RETURNING id
@@ -1335,13 +834,13 @@ async function processContractBatch(
           contractData.kategorie,
           contractData.datum,
           contractData.dodavatel,
+          contractData.dodavatel_ico || null,
           contractData.zadavatel,
+          contractData.zadavatel_adresa || null,
           contractData.typ_rizeni,
-	  typeof contractData.external_id === 'object'
-    ? JSON.stringify(contractData.external_id)
-    : (contractData.external_id || null),
-	  typeof contractData.lat === 'number' ? contractData.lat : null,
-	  typeof contractData.lng === 'number' ? contractData.lng : null,
+          contractData.external_id || null,
+          typeof contractData.lat === 'number' ? contractData.lat : null,
+          typeof contractData.lng === 'number' ? contractData.lng : null,
         ];
         
         try {
@@ -1394,7 +893,7 @@ async function processContractBatch(
   };
 }
 
-// Improved extract suppliers function to work with specific contract IDs
+// Function to extract suppliers from contracts
 async function extractSuppliersFromBatch(tableNames: Record<string, string>, contractIds: number[]) {
   console.log(`\n=== Extracting suppliers from ${contractIds.length} contracts ===`);
   
@@ -1466,24 +965,19 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
           console.log(`Found ${dbIds.length} contract IDs in database to extract suppliers from`);
           idsToUse = dbIds;
         } else {
-          console.log('No suitable contracts found in database, proceeding with test suppliers');
+          console.log('No suitable contracts found in database');
+          return { inserted: 0, skipped: 0, errors: 0 };
         }
       } catch (e) {
         console.error('Error fetching contract IDs from database:', e);
-        // Continue with test suppliers
+        return { inserted: 0, skipped: 0, errors: 0 };
       }
     }
     
-    // If we still have no IDs, skip to test suppliers
+    // If we still have no IDs, skip
     if (idsToUse.length === 0) {
-      console.log('No contract IDs available for supplier extraction, creating test suppliers...');
-      const testResults = await createTestSuppliers(tableNames);
-      return { 
-        inserted: testResults.inserted, 
-        skipped: testResults.skipped, 
-        errors: testResults.errors,
-        finalCount: testResults.finalCount
-      };
+      console.log('No contract IDs available for supplier extraction');
+      return { inserted: 0, skipped: 0, errors: 0 };
     }
     
     console.log(`Using ${idsToUse.length} contract IDs for supplier extraction`);
@@ -1491,7 +985,7 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
     // 2. Get unique suppliers from the specified contracts
     console.log(`Fetching suppliers from specified contracts...`);
     const supplierQuery = `
-      SELECT DISTINCT dodavatel 
+      SELECT DISTINCT dodavatel, dodavatel_ico 
       FROM "${smlouvaTable}" 
       WHERE id IN (${idsToUse.join(',')})
         AND dodavatel IS NOT NULL 
@@ -1525,6 +1019,7 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
       
       for (const supplier of batch) {
         const supplierName = supplier.dodavatel;
+        const supplierIco = supplier.dodavatel_ico;
         
         if (!supplierName || supplierName === 'Neuvedeno') {
           skippedCount++;
@@ -1552,30 +1047,25 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
             continue;
           }
           
-          // Generate random data for the supplier
-          const ico = (10000000 + Math.floor(Math.random() * 89999999)).toString();
-          const dateInPast = new Date();
-          dateInPast.setFullYear(dateInPast.getFullYear() - Math.floor(Math.random() * 20) - 1);
-          const employees = Math.floor(Math.random() * 1000) + 1;
-          
-          // Insert the supplier
-	  const insertQuery = `
-            INSERT INTO "${smlouvaTable}" (
-              nazev, castka, kategorie, datum, dodavatel, zadavatel,
-              typ_rizeni, external_id, lat, lng, created_at, updated_at
+          // Insert the supplier with actual data
+          const currentDate = new Date();
+          const insertQuery = `
+            INSERT INTO "${dodavatelTable}" (
+              nazev, 
+              ico, 
+              datum_zalozeni, 
+              created_at, 
+              updated_at
             ) VALUES (
-              $1, $2, $3, $4, $5, $6, $7, $8,
-              CASE WHEN $9::text = 'null' THEN NULL ELSE $9::double precision END,
-              CASE WHEN $10::text = 'null' THEN NULL ELSE $10::double precision END,
-              CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+              $1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             )
-            RETURNING id
+            ON CONFLICT (nazev) DO NOTHING
           `;
           
-          await prisma.$executeRawUnsafe(insertQuery, supplierName, ico, dateInPast, employees);
+          await prisma.$executeRawUnsafe(insertQuery, supplierName, supplierIco || null, currentDate);
           
           if (CONFIG.DEBUG) {
-            console.log(`Inserted supplier "${supplierName}"`);
+            console.log(`Inserted supplier "${supplierName}" with ICO ${supplierIco || 'unknown'}`);
           }
           
           insertedCount++;
@@ -1590,20 +1080,7 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
       console.log(`Supplier batch complete: ${batchInserted} inserted, ${batchSkipped} skipped, ${batchErrors} errors`);
     }
     
-    // 4. If we didn't insert any suppliers and there are none in the DB, create test suppliers
-    if (insertedCount === 0) {
-      const existingCountQuery = `SELECT COUNT(*) as count FROM "${dodavatelTable}"`;
-      const existingResult = await prisma.$queryRawUnsafe(existingCountQuery);
-      const existingCount = Array.isArray(existingResult) && existingResult.length > 0 ? Number(existingResult[0].count) : 0;
-      
-      if (existingCount === 0) {
-        console.log('No suppliers were inserted or found in the table. Creating test suppliers...');
-        const testResults = await createTestSuppliers(tableNames);
-        insertedCount += testResults.inserted;
-      }
-    }
-    
-    // 5. Verify results
+    // 4. Verify results
     let finalCount = 0;
     try {
       const countQuery = `SELECT COUNT(*) as count FROM "${dodavatelTable}"`;
@@ -1634,142 +1111,7 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
   }
 }
 
-// Create test suppliers if needed
-async function createTestSuppliers(tableNames: Record<string, string>) {
-  console.log('\n=== CREATING TEST SUPPLIERS ===');
-  
-  const dodavatelTable = tableNames.dodavatel || 'dodavatel';
-  let insertedCount = 0;
-  let skippedCount = 0;
-  let errorCount = 0;
-  
-  try {
-    // 1. Check if table exists and create it if not
-    try {
-      console.log(`Checking if ${dodavatelTable} table exists...`);
-      
-      // Try to query the table
-      try {
-        await prisma.$executeRawUnsafe(`SELECT 1 FROM "${dodavatelTable}" LIMIT 1`);
-        console.log(`✓ Table ${dodavatelTable} exists`);
-      } catch (e) {
-        console.log(`Creating table ${dodavatelTable} as it does not exist...`);
-        
-        const createTableQuery = `
-          CREATE TABLE IF NOT EXISTS "${dodavatelTable}" (
-            "nazev" TEXT PRIMARY KEY,
-            "ico" TEXT,
-            "datum_zalozeni" TIMESTAMP(3),
-            "pocet_zamestnancu" INTEGER,
-            "created_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
-            "updated_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP
-          )
-        `;
-        
-        await prisma.$executeRawUnsafe(createTableQuery);
-        console.log(`Table ${dodavatelTable} created successfully`);
-      }
-    } catch (e) {
-      console.error(`CRITICAL ERROR: Failed to ensure ${dodavatelTable} table exists:`, e);
-      return { 
-        inserted: 0, 
-        skipped: 0, 
-        error: true, 
-        message: `Failed to ensure ${dodavatelTable} table exists: ${e instanceof Error ? e.message : String(e)}` 
-      };
-    }
-    
-    // 2. Generate test data
-    console.log('Generating test supplier data...');
-    const testSuppliers = [
-      { name: 'Metrostav a.s.', ico: '44915300', employees: 3500 },
-      { name: 'Skanska a.s.', ico: '26271303', employees: 2800 },
-      { name: 'STRABAG a.s.', ico: '60838744', employees: 2000 },
-      { name: 'OHL ŽS, a.s.', ico: '46342796', employees: 1500 },
-      { name: 'EUROVIA CS, a.s.', ico: '45274924', employees: 1800 },
-      { name: 'HOCHTIEF CZ a.s.', ico: '46678468', employees: 1200 },
-      { name: 'IMOS Brno, a.s.', ico: '25322257', employees: 800 },
-      { name: 'GEOSAN GROUP a.s.', ico: '28169522', employees: 600 },
-      { name: 'SWIETELSKY stavební s.r.o.', ico: '48035599', employees: 700 },
-      { name: 'M - SILNICE a.s.', ico: '42196868', employees: 500 }
-    ];
-    
-    // 3. Insert each supplier
-    console.log(`Attempting to insert ${testSuppliers.length} test suppliers...`);
-    
-    for (const supplier of testSuppliers) {
-      try {
-        // Check if supplier already exists
-        const existsQuery = `SELECT COUNT(*) as count FROM "${dodavatelTable}" WHERE nazev = $1`;
-        const existsResult = await prisma.$queryRawUnsafe(existsQuery, supplier.name);
-        const existsCount = Array.isArray(existsResult) && existsResult.length > 0 ? Number(existsResult[0].count) : 0;
-        
-        if (existsCount > 0) {
-          console.log(`Supplier already exists: ${supplier.name}`);
-          skippedCount++;
-          continue;
-        }
-        
-        // Insert the supplier
-        const insertQuery = `
-          INSERT INTO "${dodavatelTable}" (
-            nazev, 
-            ico, 
-            datum_zalozeni, 
-            pocet_zamestnancu, 
-            created_at, 
-            updated_at
-          ) VALUES (
-            $1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-          )
-          ON CONFLICT (nazev) DO NOTHING
-        `;
-        
-        const randomDate = new Date(Date.now() - Math.floor(Math.random() * 10 * 365 * 24 * 60 * 60 * 1000)); // Random date in last 10 years
-        
-        await prisma.$executeRawUnsafe(insertQuery, supplier.name, supplier.ico, randomDate, supplier.employees);
-        
-        console.log(`✓ Test supplier inserted: ${supplier.name}`);
-        insertedCount++;
-      } catch (e) {
-        console.error(`Error inserting test supplier ${supplier.name}:`, e);
-        errorCount++;
-      }
-    }
-    
-    // 4. Verify the results
-    let finalCount = 0;
-    try {
-      const countQuery = `SELECT COUNT(*) as count FROM "${dodavatelTable}"`;
-      const countResult = await prisma.$queryRawUnsafe(countQuery);
-      finalCount = Array.isArray(countResult) && countResult.length > 0 ? Number(countResult[0].count) : 0;
-      
-      console.log(`Final count in ${dodavatelTable} table: ${finalCount} records`);
-    } catch (e) {
-      console.error(`Error getting final count from ${dodavatelTable}:`, e);
-    }
-    
-    console.log(`Test supplier creation summary: ${insertedCount} inserted, ${skippedCount} skipped, ${errorCount} errors`);
-    console.log('=== TEST SUPPLIER CREATION COMPLETE ===\n');
-    
-    return { 
-      inserted: insertedCount, 
-      skipped: skippedCount, 
-      errors: errorCount,
-      finalCount
-    };
-  } catch (e) {
-    console.error('Unexpected error in createTestSuppliers:', e);
-    return { 
-      inserted: 0, 
-      skipped: 0, 
-      error: true, 
-      message: `Unexpected error in createTestSuppliers: ${e instanceof Error ? e.message : String(e)}` 
-    };
-  }
-}
-
-// Improved create amendments function to work with specific contract IDs
+// Function to create contract amendments
 async function createAmendmentsForBatch(tableNames: Record<string, string>, contractIds: number[]) {
   console.log(`\n=== CREATING AMENDMENTS FOR ${contractIds.length} CONTRACTS ===`);
   
@@ -2079,6 +1421,9 @@ export async function syncData() {
   const tableNames = await getExactTableNames();
   const smlouvaTable = tableNames.smlouva || 'smlouva';
   
+  // Ensure database schema has required columns
+  await ensureDatabaseSchema(tableNames);
+  
   // Run diagnostic checks before processing
   await diagnosticCheck(tableNames);
   
@@ -2336,100 +1681,100 @@ export async function syncData() {
     }
     
     return summary;
-    }
+}
+
+// Direct execution functions for individual phases
+export async function directlyExtractSuppliers(): Promise<any> {
+  try {
+    console.log('Starting direct supplier extraction...');
     
-    // Direct execution functions for individual phases
-    export async function directlyExtractSuppliers(): Promise<any> {
-      try {
-        console.log('Starting direct supplier extraction...');
-        
-        // Get table names
-        const tableNames = await getExactTableNames();
-        
-        // Run the extraction with empty IDs array (will force fallback behavior)
-        const result = await extractSuppliersFromBatch(tableNames, []);
-        
-        console.log('Direct supplier extraction complete');
-        return result;
-      } catch (error) {
-        console.error('Error in direct supplier extraction:', error);
-        return { error: true, message: error instanceof Error ? error.message : String(error) };
+    // Get table names
+    const tableNames = await getExactTableNames();
+    
+    // Run the extraction with empty IDs array (will force fallback behavior)
+    const result = await extractSuppliersFromBatch(tableNames, []);
+    
+    console.log('Direct supplier extraction complete');
+    return result;
+  } catch (error) {
+    console.error('Error in direct supplier extraction:', error);
+    return { error: true, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function directlyCreateAmendments(): Promise<any> {
+  try {
+    console.log('Starting direct amendment creation...');
+    
+    // Get table names
+    const tableNames = await getExactTableNames();
+    
+    // Run the amendment creation with empty IDs array (will force fallback behavior)
+    const result = await createAmendmentsForBatch(tableNames, []);
+    
+    console.log('Direct amendment creation complete');
+    return result;
+  } catch (error) {
+    console.error('Error in direct amendment creation:', error);
+    return { error: true, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// Command line execution
+if (require.main === module) {
+  (async () => {
+    try {
+      // Command line arguments
+      const args = process.argv.slice(2);
+      const command = args[0] || 'sync';
+
+      // Check for reset flag
+      if (args.includes('--reset') || args.includes('-r')) {
+        console.log('Force resetting safe-point...');
+        process.env.FORCE_RESET_SAFEPOINT = 'true';
       }
-    }
-    
-    export async function directlyCreateAmendments(): Promise<any> {
-      try {
-        console.log('Starting direct amendment creation...');
-        
-        // Get table names
-        const tableNames = await getExactTableNames();
-        
-        // Run the amendment creation with empty IDs array (will force fallback behavior)
-        const result = await createAmendmentsForBatch(tableNames, []);
-        
-        console.log('Direct amendment creation complete');
-        return result;
-      } catch (error) {
-        console.error('Error in direct amendment creation:', error);
-        return { error: true, message: error instanceof Error ? error.message : String(error) };
+
+      // Check for debug flag
+      if (args.includes('--debug') || args.includes('-d')) {
+        console.log('Enabling debug mode...');
+        process.env.DEBUG = 'true';
       }
+
+      // Check for force supplier extraction flag
+      if (args.includes('--force-suppliers') || args.includes('-s')) {
+        console.log('Forcing supplier extraction...');
+        process.env.FORCE_EXTRACT_SUPPLIERS = 'true';
+      }
+
+      // Check for force amendment creation flag
+      if (args.includes('--force-amendments') || args.includes('-a')) {
+        console.log('Forcing amendment creation...');
+        process.env.FORCE_CREATE_AMENDMENTS = 'true';
+      }
+
+      switch (command) {
+        case 'suppliers':
+          console.log('Running supplier extraction only...');
+          await directlyExtractSuppliers();
+          break;
+        case 'amendments':
+          console.log('Running amendment creation only...');
+          await directlyCreateAmendments();
+          break;
+        case 'sync':
+        default:
+          console.log('Running full sync process...');
+          await syncData();
+          break;
+      }
+
+      console.log('Process completed successfully');
+      process.exit(0);
+    } catch (error) {
+      console.error('Fatal error in main process:', error);
+      process.exit(1);
     }
-    
-    // Command line execution
-    if (require.main === module) {
-      (async () => {
-        try {
-          // Command line arguments
-          const args = process.argv.slice(2);
-          const command = args[0] || 'sync';
-    
-          // Check for reset flag
-          if (args.includes('--reset') || args.includes('-r')) {
-            console.log('Force resetting safe-point...');
-            process.env.FORCE_RESET_SAFEPOINT = 'true';
-          }
-    
-          // Check for debug flag
-          if (args.includes('--debug') || args.includes('-d')) {
-            console.log('Enabling debug mode...');
-            process.env.DEBUG = 'true';
-          }
-    
-          // Check for force supplier extraction flag
-          if (args.includes('--force-suppliers') || args.includes('-s')) {
-            console.log('Forcing supplier extraction...');
-            process.env.FORCE_EXTRACT_SUPPLIERS = 'true';
-          }
-    
-          // Check for force amendment creation flag
-          if (args.includes('--force-amendments') || args.includes('-a')) {
-            console.log('Forcing amendment creation...');
-            process.env.FORCE_CREATE_AMENDMENTS = 'true';
-          }
-    
-          switch (command) {
-            case 'suppliers':
-              console.log('Running supplier extraction only...');
-              await directlyExtractSuppliers();
-              break;
-            case 'amendments':
-              console.log('Running amendment creation only...');
-              await directlyCreateAmendments();
-              break;
-            case 'sync':
-            default:
-              console.log('Running full sync process...');
-              await syncData();
-              break;
-          }
-    
-          console.log('Process completed successfully');
-          process.exit(0);
-        } catch (error) {
-          console.error('Fatal error in main process:', error);
-          process.exit(1);
-        }
-      })();
-    }
-    
-    export default { syncData, directlyExtractSuppliers, directlyCreateAmendments };
+  })();
+}
+
+export default { syncData, directlyExtractSuppliers, directlyCreateAmendments };
