@@ -1,237 +1,190 @@
-"use server"
+"use client"
 
-import { getCachedStats, cacheStats } from "@/lib/cache"
-import { prisma } from "@/lib/db-init"
+import { useState, useEffect } from "react"
+import { AlertTriangle, ExternalLink, Loader2, RefreshCw, Info } from "lucide-react"
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { getNeobvykleSmlouvy } from "@/app/actions/anomalie"
+import CacheStatusIndicator from "@/components/cache-status-indicator"
 
-// Typy anomálií, které detekujeme
-const ANOMALY_TYPES = {
-  NEW_COMPANY_BIG_CONTRACT: "nová firma",
-  NO_TENDER: "bez výběrového řízení",
-  PRICE_INCREASE: "navýšení ceny",
-  SINGLE_EMPLOYEE: "malá firma",
-  BIG_AMOUNT: "velká částka"
-};
+export default function UnusualContracts() {
+  const [contracts, setContracts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isCached, setIsCached] = useState(false);
+  const [databaseStatus, setDatabaseStatus] = useState<{
+    ready: boolean;
+    message?: string;
+    setupInProgress?: boolean;
+  }>({ ready: true });
 
-// Funkce pro získání přesného názvu tabulky (case-sensitive)
-async function getExactTableName(tableName: string): Promise<string | null> {
-  try {
-    const result = await prisma.$queryRaw`
-      SELECT tablename FROM pg_tables 
-      WHERE schemaname='public' 
-      AND LOWER(tablename)=LOWER(${tableName})
-    `;
+  const loadData = async () => {
+    setLoading(true);
+    setError(null);
     
-    if (Array.isArray(result) && result.length > 0) {
-      return result[0].tablename;
-    }
-    return null;
-  } catch (error) {
-    console.error(`Chyba při zjišťování přesného názvu tabulky ${tableName}:`, error);
-    return null;
-  }
-}
-
-// Funkce pro ověření, zda je databáze správně inicializována
-async function isDatabaseInitialized(): Promise<{
-  ready: boolean;
-  tableMap?: Record<string, string | null>;
-  errorDetails?: string;
-}> {
-  try {
-    // Zjistíme přesné názvy tabulek
-    const tables = ['smlouva', 'dodavatel', 'dodatek', 'podnet'];
-    const tableInfo = await Promise.all(
-      tables.map(async tableName => {
-        const exactName = await getExactTableName(tableName);
-        return { tableName, exactName };
-      })
-    );
-    
-    const tableMap = Object.fromEntries(
-      tableInfo.map(t => [t.tableName, t.exactName])
-    );
-    
-    // Pokud některá tabulka neexistuje, vrátíme false
-    const missingTables = tableInfo.filter(t => !t.exactName).map(t => t.tableName);
-    if (missingTables.length > 0) {
-      return { 
-        ready: false, 
-        tableMap,
-        errorDetails: `Chybějící tabulky: ${missingTables.join(', ')}`
-      };
-    }
-    
-    // Zkontrolujeme, zda můžeme přistupovat k datům v tabulkách
     try {
-      // Zkusíme jednoduchý dotaz na počet záznamů v tabulce smlouva
-      const countQuery = `SELECT COUNT(*) as count FROM "${tableMap.smlouva}"`;
-      await prisma.$queryRawUnsafe(countQuery);
+      const result = await getNeobvykleSmlouvy();
       
-      return { ready: true, tableMap };
-    } catch (queryError) {
-      return { 
-        ready: false, 
-        tableMap,
-        errorDetails: `Chyba při přístupu k datům: ${queryError instanceof Error ? queryError.message : String(queryError)}`
-      };
-    }
-  } catch (error) {
-    console.error('Chyba při kontrole inicializace databáze:', error);
-    return { 
-      ready: false,
-      errorDetails: `Neočekávaná chyba: ${error instanceof Error ? error.message : String(error)}`
-    };
-  }
-}
-
-export async function getNeobvykleSmlouvy(limit = 5) {
-  try {
-    // Zkusit načíst z cache
-    const cachedData = await getCachedStats("neobvykleSmlouvy");
-    if (cachedData) {
-      return { data: cachedData, cached: true };
-    }
-
-    // Check if database is initialized
-    const dbStatus = await isDatabaseInitialized();
-    
-    if (!dbStatus.ready) {
-      console.warn("Databáze není plně inicializovaná");
-      return { 
-        data: [], 
-        cached: false,
-        dbStatus: {
-          ready: false,
-          message: `Databázové tabulky nejsou správně nastaveny. ${dbStatus.errorDetails || "Je potřeba spustit inicializaci databáze."}`
-        } 
-      };
-    }
-
-    // Máme správné názvy tabulek
-    const tableMap = dbStatus.tableMap!;
-
-    try {
-      // Použijeme $queryRawUnsafe s přesnými názvy tabulek
-      
-      // 1. Nová firma s velkou zakázkou
-      const newCompanyQuery = `
-        SELECT 
-          s.id,
-          s.nazev as title,
-          s.castka as amount,
-          s.datum as date,
-          s.dodavatel as contractor,
-          s.zadavatel as authority,
-          'IT služby' as category,
-          ARRAY['nová firma', 'malá firma', 'velká částka']::text[] as flags,
-          'Společnost založená před méně než 6 měsíci získala zakázku nad 10M Kč.' as description
-        FROM "${tableMap.smlouva}" s
-        JOIN "${tableMap.dodavatel}" d ON s.dodavatel = d.nazev
-        WHERE d.datum_zalozeni > NOW() - INTERVAL '6 months'
-        AND s.castka > 10000000
-        LIMIT 5
-      `;
-      const newCompanyBigContracts = await prisma.$queryRawUnsafe(newCompanyQuery);
-
-      // 2. Zakázky bez výběrového řízení
-      const noTenderQuery = `
-        SELECT 
-          s.id,
-          s.nazev as title,
-          s.castka as amount,
-          s.datum as date,
-          s.dodavatel as contractor,
-          s.zadavatel as authority,
-          'Stavební práce' as category,
-          ARRAY['bez výběrového řízení', 'časová tíseň']::text[] as flags,
-          'Zakázka zadána bez řádného výběrového řízení s odvoláním na výjimku.' as description
-        FROM "${tableMap.smlouva}" s
-        WHERE s.typ_rizeni = 'bez výběrového řízení'
-        AND s.castka > 5000000
-        LIMIT 5
-      `;
-      const noTenderContracts = await prisma.$queryRawUnsafe(noTenderQuery);
-
-      // 3. Dodatky navyšující cenu
-      const priceIncreaseQuery = `
-        SELECT 
-          s.id,
-          s.nazev as title,
-          s.castka as amount,
-          s.datum as date,
-          s.dodavatel as contractor,
-          s.zadavatel as authority,
-          'Stavební práce' as category,
-          ARRAY['dodatky', 'navýšení ceny']::text[] as flags,
-          'Původní zakázka byla výrazně navýšena dodatky.' as description
-        FROM "${tableMap.smlouva}" s
-        WHERE EXISTS (
-          SELECT 1 FROM "${tableMap.dodatek}" d 
-          WHERE d.smlouva_id = s.id 
-          GROUP BY d.smlouva_id
-          HAVING SUM(d.castka) > s.castka * 0.3
-        )
-        LIMIT 5
-      `;
-      const priceIncreaseContracts = await prisma.$queryRawUnsafe(priceIncreaseQuery);
-
-      // Spojení všech anomálií
-      let allAnomalies = [
-        ...newCompanyBigContracts,
-        ...noTenderContracts,
-        ...priceIncreaseContracts
-      ];
-      
-      // Pokud nemáme žádné anomálie, vrátíme prázdné pole
-      if (allAnomalies.length === 0) {
-        return { 
-          data: [], 
-          cached: false,
-          dbStatus: {
-            ready: true,
-            message: "Databáze je připravena, ale nebyla nalezena žádná data odpovídající kritériím pro neobvyklé zakázky."
-          }
-        };
+      // Set database status from API response
+      if (result.dbStatus) {
+        setDatabaseStatus({
+          ready: result.dbStatus.ready,
+          message: result.dbStatus.message,
+          setupInProgress: false
+        });
       }
       
-      // Seřadit podle data a omezit počet
-      const finalResults = allAnomalies
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-        .slice(0, limit);
+      // Set contracts data
+      if (result.data && result.data.length > 0) {
+        setContracts(result.data);
+        setIsCached(result.cached || false);
+      } else {
+        setContracts([]);
+      }
+    } catch (err) {
+      console.error("Chyba při načítání neobvyklých zakázek:", err);
+      setError("Nepodařilo se načíst data o neobvyklých zakázkách.");
       
-      // Uložit do cache
-      await cacheStats("neobvykleSmlouvy", finalResults);
-      
-      return { 
-        data: finalResults, 
-        cached: false,
-        dbStatus: {
-          ready: true
-        } 
-      };
-    } catch (dbError) {
-      console.error("Chyba při dotazování do databáze:", dbError);
-      return { 
-        data: [], 
-        cached: false,
-        error: dbError instanceof Error ? dbError.message : String(dbError),
-        dbStatus: {
-          ready: false,
-          message: "Došlo k chybě při dotazování do databáze: " + 
-            (dbError instanceof Error ? dbError.message : String(dbError))
-        }
-      };
-    }
-  } catch (error) {
-    console.error("Chyba při načítání neobvyklých zakázek:", error);
-    return { 
-      data: [], 
-      cached: false,
-      error: (error as Error).message,
-      dbStatus: {
+      // Set database as not ready if we couldn't fetch data
+      setDatabaseStatus({
         ready: false,
-        message: "Neočekávaná chyba při načítání dat: " + (error as Error).message
-      }
-    };
+        message: err instanceof Error ? err.message : "Neznámá chyba při načítání dat",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Načíst data při prvním načtení komponenty
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  // Formátování data
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return new Intl.DateTimeFormat("cs-CZ", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric"
+    }).format(date);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center py-6">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    );
   }
+
+  if (error && contracts.length === 0) {
+    return (
+      <div className="text-center text-red-500 py-4">
+        <p>{error}</p>
+        <Button onClick={loadData} variant="outline" className="mt-2">
+          <RefreshCw className="h-4 w-4 mr-2" />
+          Zkusit znovu
+        </Button>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between mb-2">
+        <div>
+          {!databaseStatus.ready && (
+            <Alert variant="warning" className="mb-4 bg-amber-50 border-amber-200">
+              <Info className="h-4 w-4 text-amber-600" />
+              <AlertTitle className="text-amber-800">Problém s databází</AlertTitle>
+              <AlertDescription className="text-amber-700">
+                {databaseStatus.message || "Databáze není správně nakonfigurována."}
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
+        
+        <CacheStatusIndicator
+          isCached={isCached}
+          onRefresh={loadData}
+        />
+      </div>
+      
+      {!databaseStatus.ready && (
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center gap-3 mb-4 text-amber-600">
+              <AlertTriangle className="h-5 w-5" />
+              <h3 className="font-medium">Problém s databází</h3>
+            </div>
+            <p className="text-muted-foreground mb-4">
+              {databaseStatus.message || "Databáze není správně nakonfigurována. Data nelze načíst."}
+            </p>
+            <Button onClick={loadData} variant="outline">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Zkusit znovu
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+      
+      {databaseStatus.ready && contracts.length > 0 ? (
+        contracts.map((contract) => (
+          <Card key={contract.id} className="border-amber-200 bg-amber-50">
+            <CardHeader className="pb-2">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-500 mt-1 flex-shrink-0" />
+                <div>
+                  <CardTitle className="text-base">{contract.title}</CardTitle>
+                  <CardDescription className="text-amber-700 mt-1">
+                    {formatDate(contract.date)} • {contract.amount.toLocaleString("cs-CZ")} Kč
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="pb-2">
+              <p className="text-sm text-amber-900">{contract.description}</p>
+              <div className="flex flex-wrap gap-1 mt-3">
+                {contract.flags.map((flag: string, index: number) => (
+                  <Badge key={index} variant="outline" className="bg-amber-100 text-amber-800 border-amber-200">
+                    {flag}
+                  </Badge>
+                ))}
+              </div>
+            </CardContent>
+            <CardFooter className="pt-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-amber-800 hover:text-amber-900 hover:bg-amber-100 p-0 h-auto"
+                asChild
+              >
+                <a href={contract.odkaz} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="h-4 w-4 mr-1" />
+                  <span>Zobrazit detail v registru smluv</span>
+                </a>
+              </Button>
+            </CardFooter>
+          </Card>
+        ))
+      ) : databaseStatus.ready ? (
+        <Card>
+          <CardContent className="p-6 text-center">
+            <p className="text-muted-foreground">Nebyly nalezeny žádné neobvyklé zakázky v databázi.</p>
+            <p className="text-sm text-muted-foreground mt-2">
+              Je možné, že žádná zakázka nesplňuje kritéria pro označení jako neobvyklá,
+              nebo databáze neobsahuje dostatek dat pro analýzu.
+            </p>
+            <Button onClick={loadData} variant="outline" className="mt-4">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Obnovit
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+    </div>
+  )
 }
