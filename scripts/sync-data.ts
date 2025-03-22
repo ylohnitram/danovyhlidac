@@ -569,6 +569,9 @@ function transformContractData(record: any): ContractData | null {
     // Log the contract structure in debug mode
     if (CONFIG.DEBUG) {
       console.log('Contract structure keys:', Object.keys(contract));
+      if (record.identifikator) {
+        console.log('Identifikator structure:', record.identifikator);
+      }
     }
     
     // Extract basic data
@@ -605,12 +608,51 @@ function transformContractData(record: any): ContractData | null {
                       extractFirstValue(contract.kategorie) || 
                       'ostatni';
    
-    // Extract external ID
-    let externalId = null;
-    if (record.identifikator) {
-      externalId = extractFirstValue(record.identifikator);
-    } else if (record.id) {
-      externalId = extractFirstValue(record.id);
+    // Extract external ID - improved version that handles nested structure
+    let externalId: string | undefined = undefined;
+    try {
+      if (record.identifikator) {
+        // Debug the structure
+        if (CONFIG.DEBUG) {
+          console.log('Identifikator structure:', JSON.stringify(record.identifikator, null, 2));
+        }
+        
+        // Extract idSmlouvy (contract ID) from the identifikator
+        if (record.identifikator.idSmlouvy) {
+          externalId = extractFirstValue(record.identifikator.idSmlouvy);
+          if (CONFIG.DEBUG) {
+            console.log(`Extracted idSmlouvy: ${externalId}`);
+          }
+        } 
+        // If no idSmlouvy, try idVerze (version ID)
+        else if (record.identifikator.idVerze) {
+          externalId = extractFirstValue(record.identifikator.idVerze);
+          if (CONFIG.DEBUG) {
+            console.log(`Extracted idVerze: ${externalId}`);
+          }
+        }
+        // If identifikator doesn't have the expected structure, log it for debugging
+        else if (CONFIG.DEBUG) {
+          console.log('Identifikator doesn\'t have expected structure:', record.identifikator);
+        }
+      }
+      
+      // If we still don't have an ID and there's a direct ID property, use that
+      if (!externalId && record.id) {
+        externalId = extractFirstValue(record.id);
+        if (CONFIG.DEBUG) {
+          console.log(`Extracted direct ID: ${externalId}`);
+        }
+      }
+      
+      // Final safeguard against object type
+      if (externalId && typeof externalId === 'object') {
+        console.warn('External ID is an object, not a string:', externalId);
+        externalId = undefined;
+      }
+    } catch (error) {
+      console.error("Error extracting external ID:", error);
+      externalId = undefined;
     }
 
     // NOVÝ PŘÍSTUP: Použijeme skórovací systém pro rozpoznání rolí
@@ -1075,8 +1117,8 @@ function transformContractData(record: any): ContractData | null {
       zadavatel,
       typ_rizeni,
       external_id: externalId,
-      lat,
-      lng,
+      lat: undefined,
+      lng: undefined,
     };
   } catch (error) {
     console.error('Error transforming contract data:', error);
@@ -1218,14 +1260,14 @@ async function processContractBatch(
             dodavatel = $5,
             zadavatel = $6,
             typ_rizeni = $7,
-            lat = $8,
-            lng = $9,
-            external_id = $10,
+            external_id = $8,
+            lat = CASE WHEN $9::text = 'null' THEN NULL ELSE $9::double precision END,
+            lng = CASE WHEN $10::text = 'null' THEN NULL ELSE $10::double precision END,
             updated_at = CURRENT_TIMESTAMP
           WHERE id = $11
           RETURNING id
         `;
-        
+
         const updateParams = [
           contractData.nazev,
           contractData.castka,
@@ -1234,9 +1276,11 @@ async function processContractBatch(
           contractData.dodavatel,
           contractData.zadavatel,
           contractData.typ_rizeni,
-	  contractData.external_id || null,
-          contractData.lat || null,
-          contractData.lng || null,
+	  typeof contractData.external_id === 'object'
+    ? JSON.stringify(contractData.external_id)
+    : (contractData.external_id || null),
+	  typeof contractData.lat === 'number' ? contractData.lat : null,
+	  typeof contractData.lng === 'number' ? contractData.lng : null,
           existingContract.id
         ];
         
@@ -1275,9 +1319,12 @@ async function processContractBatch(
 	const insertQuery = `
           INSERT INTO "${smlouvaTable}" (
             nazev, castka, kategorie, datum, dodavatel, zadavatel, 
-            typ_rizeni, lat, lng, external_id, created_at, updated_at
+            typ_rizeni, external_id, lat, lng, created_at, updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            $1, $2, $3, $4, $5, $6, $7, $8, 
+            CASE WHEN $9::text = 'null' THEN NULL ELSE $9::double precision END,
+            CASE WHEN $10::text = 'null' THEN NULL ELSE $10::double precision END,
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           )
           RETURNING id
         `;
@@ -1290,9 +1337,11 @@ async function processContractBatch(
           contractData.dodavatel,
           contractData.zadavatel,
           contractData.typ_rizeni,
-	  contractData.external_id || null,
-          contractData.lat || null,
-          contractData.lng || null
+	  typeof contractData.external_id === 'object'
+    ? JSON.stringify(contractData.external_id)
+    : (contractData.external_id || null),
+	  typeof contractData.lat === 'number' ? contractData.lat : null,
+	  typeof contractData.lng === 'number' ? contractData.lng : null,
         ];
         
         try {
@@ -1510,18 +1559,17 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
           const employees = Math.floor(Math.random() * 1000) + 1;
           
           // Insert the supplier
-          const insertQuery = `
-            INSERT INTO "${dodavatelTable}" (
-              nazev, 
-              ico, 
-              datum_zalozeni, 
-              pocet_zamestnancu, 
-              created_at, 
-              updated_at
+	  const insertQuery = `
+            INSERT INTO "${smlouvaTable}" (
+              nazev, castka, kategorie, datum, dodavatel, zadavatel,
+              typ_rizeni, external_id, lat, lng, created_at, updated_at
             ) VALUES (
-              $1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+              $1, $2, $3, $4, $5, $6, $7, $8,
+              CASE WHEN $9::text = 'null' THEN NULL ELSE $9::double precision END,
+              CASE WHEN $10::text = 'null' THEN NULL ELSE $10::double precision END,
+              CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             )
-            ON CONFLICT (nazev) DO NOTHING
+            RETURNING id
           `;
           
           await prisma.$executeRawUnsafe(insertQuery, supplierName, ico, dateInPast, employees);
