@@ -377,7 +377,7 @@ async function parseXmlDump(filePath: string) {
   }
 }
 
-// Helper function to extract the first value from an array or return undefined
+// Function to extract the first value from an array or return undefined
 function extractFirstValue(value: any): string | undefined {
   if (!value) return undefined;
   
@@ -398,6 +398,56 @@ function extractFirstValue(value: any): string | undefined {
   }
   
   return value?.toString();
+}
+
+// Function to recursively search for a key in an object
+function findKeyInObject(obj: any, targetKey: string, maxDepth = 3, currentDepth = 0): any[] {
+  if (!obj || typeof obj !== 'object' || currentDepth > maxDepth) return [];
+  
+  let results: any[] = [];
+  
+  for (const key in obj) {
+    if (key === targetKey) {
+      results.push(obj[key]);
+    } else if (typeof obj[key] === 'object') {
+      const nestedResults = findKeyInObject(obj[key], targetKey, maxDepth, currentDepth + 1);
+      results = results.concat(nestedResults);
+    }
+  }
+  
+  return results;
+}
+
+// DEBUG: Function to dump object structure
+function dumpObjectStructure(obj: any, maxDepth = 3, currentDepth = 0, prefix = ''): string {
+  if (!obj || typeof obj !== 'object' || currentDepth > maxDepth) {
+    return prefix + (typeof obj === 'object' ? '[Object]' : String(obj)) + '\n';
+  }
+  
+  let result = '';
+  
+  for (const key in obj) {
+    const value = obj[key];
+    if (value === null) {
+      result += `${prefix}${key}: null\n`;
+    } else if (typeof value === 'object') {
+      if (Array.isArray(value)) {
+        result += `${prefix}${key}: [Array(${value.length})]\n`;
+        if (value.length > 0 && currentDepth < maxDepth) {
+          result += dumpObjectStructure(value[0], maxDepth, currentDepth + 1, prefix + '  ');
+        }
+      } else {
+        result += `${prefix}${key}: {Object}\n`;
+        if (currentDepth < maxDepth) {
+          result += dumpObjectStructure(value, maxDepth, currentDepth + 1, prefix + '  ');
+        }
+      }
+    } else {
+      result += `${prefix}${key}: ${value}\n`;
+    }
+  }
+  
+  return result;
 }
 
 // Function for geocoding using Nominatim API 
@@ -518,39 +568,47 @@ async function ensureDatabaseSchema(tableNames: Record<string, string>) {
   }
 }
 
-// Helper function to extract the first value from an array or return undefined
-// Enhanced to better handle nested structures
-function extractFirstValue(value: any): string | undefined {
-  if (!value) return undefined;
-  
-  if (Array.isArray(value)) {
-    if (value.length === 0) return undefined;
-    
-    const firstItem = value[0];
-    if (firstItem && typeof firstItem === 'object' && firstItem._) {
-      // Handle case where value is an array of objects with "_" property
-      return firstItem._.toString();
-    }
-    return firstItem?.toString();
-  }
-  
-  // Handle case where value is an object with "_" property (common in XML parsing)
-  if (typeof value === 'object' && value._) {
-    return value._.toString();
-  }
-  
-  return value?.toString();
-}
-
-// Transform XML data to database format with enhanced external_id extraction
+// Transform XML data to database format with enhanced debug mode
 function transformContractData(record: any): ContractData | null {
   try {
     // Check if this is a 'zaznam' record with smlouva inside
     const contract = record.smlouva ? record.smlouva[0] : record;
     
     if (CONFIG.DEBUG) {
-      console.log('Contract structure keys:', Object.keys(contract));
-      console.log('Record structure keys:', Object.keys(record));
+      console.log('\n=== CONTRACT DATA DEBUG ===');
+      console.log('Record keys:', Object.keys(record));
+      console.log('Contract keys:', Object.keys(contract));
+      
+      // Dump structure of identifikator if it exists
+      if (record.identifikator) {
+        console.log('\nRECORD IDENTIFIKATOR STRUCTURE:');
+        console.log(dumpObjectStructure(record.identifikator));
+      }
+      
+      if (contract.identifikator) {
+        console.log('\nCONTRACT IDENTIFIKATOR STRUCTURE:');
+        console.log(dumpObjectStructure(contract.identifikator));
+      }
+      
+      // Search for idVerze in the entire object
+      console.log('\nSEARCHING FOR idVerze IN RECORD:');
+      const idVerzeInRecord = findKeyInObject(record, 'idVerze');
+      console.log('Found idVerze in record:', idVerzeInRecord);
+      
+      console.log('\nSEARCHING FOR idVerze IN CONTRACT:');
+      const idVerzeInContract = findKeyInObject(contract, 'idVerze');
+      console.log('Found idVerze in contract:', idVerzeInContract);
+      
+      // Search for related fields
+      console.log('\nADDITIONAL ID FIELDS SEARCH:');
+      const idSmlouvyFields = findKeyInObject(record, 'idSmlouvy');
+      console.log('idSmlouvy fields found:', idSmlouvyFields);
+      
+      const externalIdFields = findKeyInObject(record, 'externalId');
+      console.log('externalId fields found:', externalIdFields);
+      
+      const cisloFields = findKeyInObject(record, 'cislo');
+      console.log('cislo fields found:', cisloFields);
     }
     
     // Extract basic data
@@ -587,58 +645,91 @@ function transformContractData(record: any): ContractData | null {
                       extractFirstValue(contract.kategorie) || 
                       'ostatni';
     
-    // ENHANCED EXTERNAL ID EXTRACTION
-    // Look in multiple possible locations for idVerze based on actual XML structure
+    // ENHANCED EXTERNAL ID EXTRACTION WITH EXHAUSTIVE SEARCH
     let externalId: string | undefined = undefined;
     
     // Debug the structure to help diagnose issues
     if (CONFIG.DEBUG) {
-      console.log('Looking for idVerze...');
-      if (record.identifikator) console.log('record.identifikator exists:', record.identifikator);
-      if (contract.identifikator) console.log('contract.identifikator exists:', contract.identifikator);
-      if (record.idVerze) console.log('record.idVerze exists:', record.idVerze);
-      if (contract.idVerze) console.log('contract.idVerze exists:', contract.idVerze);
+      console.log('\n=== EXTERNAL ID EXTRACTION ===');
     }
-
-    // First check in record.identifikator.idVerze (original location)
+    
+    // Try all possible locations for idVerze
     if (record.identifikator && record.identifikator.idVerze) {
       externalId = extractFirstValue(record.identifikator.idVerze);
-      if (CONFIG.DEBUG) console.log(`Found idVerze in record.identifikator.idVerze: ${externalId}`);
+      if (CONFIG.DEBUG) console.log(`1. Found idVerze in record.identifikator.idVerze: ${externalId}`);
     }
-    // Then check if idVerze is directly in the record
     else if (record.idVerze) {
       externalId = extractFirstValue(record.idVerze);
-      if (CONFIG.DEBUG) console.log(`Found idVerze directly in record: ${externalId}`);
+      if (CONFIG.DEBUG) console.log(`2. Found idVerze directly in record: ${externalId}`);
     }
-    // Check if it's in the contract object
     else if (contract.idVerze) {
       externalId = extractFirstValue(contract.idVerze);
-      if (CONFIG.DEBUG) console.log(`Found idVerze in contract: ${externalId}`);
+      if (CONFIG.DEBUG) console.log(`3. Found idVerze in contract: ${externalId}`);
     }
-    // Check if it's in contract.identifikator
     else if (contract.identifikator && contract.identifikator.idVerze) {
       externalId = extractFirstValue(contract.identifikator.idVerze);
-      if (CONFIG.DEBUG) console.log(`Found idVerze in contract.identifikator.idVerze: ${externalId}`);
+      if (CONFIG.DEBUG) console.log(`4. Found idVerze in contract.identifikator.idVerze: ${externalId}`);
     }
-    // If still not found, check for idSmlouvy as backup
+    // Try additional places that might contain identifiers
     else if (record.identifikator && record.identifikator.idSmlouvy) {
       externalId = extractFirstValue(record.identifikator.idSmlouvy);
-      if (CONFIG.DEBUG) console.log(`Using idSmlouvy from record.identifikator: ${externalId}`);
+      if (CONFIG.DEBUG) console.log(`5. Using idSmlouvy from record.identifikator: ${externalId}`);
     }
     else if (contract.identifikator && contract.identifikator.idSmlouvy) {
       externalId = extractFirstValue(contract.identifikator.idSmlouvy);
-      if (CONFIG.DEBUG) console.log(`Using idSmlouvy from contract.identifikator: ${externalId}`);
+      if (CONFIG.DEBUG) console.log(`6. Using idSmlouvy from contract.identifikator: ${externalId}`);
     }
-    // Finally, fall back to record.id if present
+    else if (record.cislo) {
+      externalId = extractFirstValue(record.cislo);
+      if (CONFIG.DEBUG) console.log(`7. Using cislo from record: ${externalId}`);
+    }
+    else if (contract.cislo) {
+      externalId = extractFirstValue(contract.cislo);
+      if (CONFIG.DEBUG) console.log(`8. Using cislo from contract: ${externalId}`);
+    }
     else if (record.id) {
       externalId = extractFirstValue(record.id);
-      if (CONFIG.DEBUG) console.log(`Using direct record.id: ${externalId}`);
+      if (CONFIG.DEBUG) console.log(`9. Using direct record.id: ${externalId}`);
+    }
+    
+    // Use recursive search to find any idVerze in any location if still not found
+    if (!externalId) {
+      const allIdVerze = findKeyInObject(record, 'idVerze');
+      if (allIdVerze.length > 0) {
+        externalId = extractFirstValue(allIdVerze[0]);
+        if (CONFIG.DEBUG) console.log(`10. Found idVerze through deep search: ${externalId}`);
+      } else {
+        // Try finding idSmlouvy if idVerze not found
+        const allIdSmlouvy = findKeyInObject(record, 'idSmlouvy');
+        if (allIdSmlouvy.length > 0) {
+          externalId = extractFirstValue(allIdSmlouvy[0]);
+          if (CONFIG.DEBUG) console.log(`11. Found idSmlouvy through deep search: ${externalId}`);
+        }
+      }
     }
     
     // If no ID was found and DEBUG is enabled, dump some data to help diagnose
     if (!externalId && CONFIG.DEBUG) {
-      console.log('WARNING: No external ID found for contract. Record dump:');
-      console.log(JSON.stringify(record, null, 2).substring(0, 1000) + '...');
+      console.log('WARNING: No external ID found for contract. Record summary:');
+      // Print a summary of the record structure to help diagnose
+      if (record.identifikator) {
+        console.log('record.identifikator:', JSON.stringify(record.identifikator));
+      }
+      if (contract.identifikator) {
+        console.log('contract.identifikator:', JSON.stringify(contract.identifikator));
+      }
+      // Look for any field that might contain an ID
+      console.log('Looking for any ID-like fields in record...');
+      for (const key of Object.keys(record)) {
+        if (key.toLowerCase().includes('id') || key.toLowerCase().includes('cislo')) {
+          console.log(`Found potential ID field ${key}:`, record[key]);
+        }
+      }
+      for (const key of Object.keys(contract)) {
+        if (key.toLowerCase().includes('id') || key.toLowerCase().includes('cislo')) {
+          console.log(`Found potential ID field ${key}:`, contract[key]);
+        }
+      }
     }
     
     // Direct extraction of parties from XML structure
@@ -681,7 +772,8 @@ function transformContractData(record: any): ContractData | null {
       return null;
     }
     
-    return {
+    // Final result with all extracted data
+    const result = {
       nazev,
       castka,
       kategorie,
@@ -695,6 +787,14 @@ function transformContractData(record: any): ContractData | null {
       lat: undefined,
       lng: undefined,
     };
+    
+    if (CONFIG.DEBUG) {
+      console.log('\n=== EXTRACTED RESULT ===');
+      console.log('external_id:', result.external_id);
+      console.log('=======================\n');
+    }
+    
+    return result;
   } catch (error) {
     console.error('Error transforming contract data:', error);
     return null;
@@ -742,6 +842,11 @@ async function processContractBatch(
         skippedCount++;
         safePoint.skippedContracts++;
         continue;
+      }
+      
+      // Add debug log for external_id
+      if (CONFIG.DEBUG) {
+        console.log(`Processing contract with external_id: ${contractData.external_id || 'null'}`);
       }
       
       // Check if the contract already exists by external ID or attributes
@@ -822,7 +927,7 @@ async function processContractBatch(
             zadavatel = $7,
             zadavatel_adresa = $8,
             typ_rizeni = $9,
-            external_id = $10,
+            external_id = CASE WHEN $10::text IS NULL THEN external_id ELSE $10::text END,
             lat = CASE WHEN $11::text = 'null' THEN NULL ELSE $11::double precision END,
             lng = CASE WHEN $12::text = 'null' THEN NULL ELSE $12::double precision END,
             updated_at = CURRENT_TIMESTAMP
@@ -851,6 +956,11 @@ async function processContractBatch(
           updatedCount++;
           safePoint.updatedContracts++;
           
+          // Log successful update for debugging
+          if (CONFIG.DEBUG) {
+            console.log(`Updated contract ID: ${existingContract.id}, external_id: ${contractData.external_id || 'null'}`);
+          }
+          
           // Add the contract ID to the list for supplier extraction
           if (Array.isArray(updateResult) && updateResult.length > 0) {
             contractIds.push(updateResult[0].id);
@@ -867,10 +977,6 @@ async function processContractBatch(
             if (!safePoint.collectedContractIds.includes(existingContract.id)) {
               safePoint.collectedContractIds.push(existingContract.id);
             }
-          }
-          
-          if (CONFIG.DEBUG) {
-            console.log(`Updated contract ID: ${existingContract.id}`);
           }
         } catch (updateError) {
           console.error(`Error updating contract:`, updateError);
@@ -910,6 +1016,11 @@ async function processContractBatch(
           const insertResult = await prisma.$queryRawUnsafe(insertQuery, ...insertParams);
           newCount++;
           safePoint.newContracts++;
+          
+          // Log successful insert for debugging
+          if (CONFIG.DEBUG) {
+            console.log(`Inserted new contract with external_id: ${contractData.external_id || 'null'}`);
+          }
           
           // Add the contract ID to the list for supplier extraction
           if (Array.isArray(insertResult) && insertResult.length > 0) {
@@ -1367,45 +1478,45 @@ async function createAmendmentsForBatch(tableNames: Record<string, string>, cont
     
     const existingResults = await prisma.$queryRawUnsafe(existingQuery);
     const contractsWithAmendments = new Set(
-      Array.isArray(existingResults) ? 
-        existingResults.map((r: any) => r.smlouva_id) : 
+      Array.isArray(existingResults) ?
+        existingResults.map((r: any) => r.smlouva_id) :
         []
     );
-    
+
     console.log(`Found ${contractsWithAmendments.size} contracts that already have amendments`);
-    
+
     // 3. Get contract details for the provided IDs
     console.log(`Fetching contract details for ${idsToUse.length} contracts...`);
     const contractsQuery = `
-      SELECT id, castka, datum 
-      FROM "${smlouvaTable}" 
+      SELECT id, castka, datum
+      FROM "${smlouvaTable}"
       WHERE id IN (${idsToUse.join(',')})
       AND castka > 1000
     `;
-    
+
     const contracts = await prisma.$queryRawUnsafe(contractsQuery);
-    
+
     if (!Array.isArray(contracts) || contracts.length === 0) {
       console.log('No suitable contracts found to create amendments for');
       return { inserted: 0, skipped: 0, errors: 0 };
     }
-    
+
     console.log(`Found ${contracts.length} contracts suitable for amendments`);
-    
+
     // 4. Process contracts in batches
     const batchSize = CONFIG.BATCH_SIZES.AMENDMENTS;
     const filteredContracts = (contracts as any[]).filter(c => !contractsWithAmendments.has(c.id));
-    
+
     console.log(`Processing ${filteredContracts.length} contracts without existing amendments`);
-    
+
     for (let i = 0; i < filteredContracts.length; i += batchSize) {
       const batch = filteredContracts.slice(i, i + batchSize);
       console.log(`Processing amendment batch ${Math.floor(i/batchSize) + 1} of ${Math.ceil(filteredContracts.length/batchSize)} (${i+1}-${Math.min(i+batchSize, filteredContracts.length)} of ${filteredContracts.length})`);
-      
+
       let batchInserted = 0;
       let batchSkipped = 0;
       let batchErrors = 0;
-      
+
       for (const contract of batch) {
         if (!contract || !contract.id) {
           console.log('Skipping invalid contract record');
@@ -1413,40 +1524,40 @@ async function createAmendmentsForBatch(tableNames: Record<string, string>, cont
           batchSkipped++;
           continue;
         }
-        
+
         try {
           // Create 1-3 amendments for this contract
           const amendmentCount = Math.floor(Math.random() * 3) + 1;
           if (CONFIG.DEBUG) {
             console.log(`Creating ${amendmentCount} amendments for contract ${contract.id}...`);
           }
-          
+
           for (let i = 0; i < amendmentCount; i++) {
             // Calculate amount (10-30% of original contract)
             const amount = contract.castka * (0.1 + Math.random() * 0.2);
-            
+
             // Calculate date (3-12 months after contract date)
             const baseDate = new Date(contract.datum);
             const amendmentDate = new Date(baseDate);
             amendmentDate.setMonth(baseDate.getMonth() + 3 + Math.floor(Math.random() * 9));
-            
+
             // Create amendment
             const insertQuery = `
               INSERT INTO "${dodatekTable}" (
-                smlouva_id, 
-                castka, 
-                datum, 
+                smlouva_id,
+                castka,
+                datum,
                 created_at
               ) VALUES (
-                $1, 
-                $2, 
-                $3, 
+                $1,
+                $2,
+                $3,
                 CURRENT_TIMESTAMP
               )
             `;
-            
+
             await prisma.$executeRawUnsafe(insertQuery, contract.id, amount, amendmentDate);
-            
+
             insertedCount++;
             batchInserted++;
           }
@@ -1456,38 +1567,38 @@ async function createAmendmentsForBatch(tableNames: Record<string, string>, cont
           batchErrors++;
         }
       }
-      
+
       console.log(`Amendment batch complete: ${batchInserted} amendments inserted, ${batchSkipped} contracts skipped, ${batchErrors} errors`);
     }
-    
+
     // 5. Verify results
     let finalCount = 0;
     try {
       const countQuery = `SELECT COUNT(*) as count FROM "${dodatekTable}"`;
       const countResult = await prisma.$queryRawUnsafe(countQuery);
       finalCount = Array.isArray(countResult) && countResult.length > 0 ? Number(countResult[0].count) : 0;
-      
+
       console.log(`Final count in ${dodatekTable} table: ${finalCount} records`);
     } catch (e) {
       console.error(`Error getting final count from ${dodatekTable}:`, e);
     }
-    
+
     console.log(`Amendment creation summary: ${insertedCount} inserted, ${skippedCount} skipped, ${errorCount} errors`);
     console.log('=== AMENDMENT CREATION COMPLETE ===\n');
-    
-    return { 
-      inserted: insertedCount, 
-      skipped: skippedCount, 
+
+    return {
+      inserted: insertedCount,
+      skipped: skippedCount,
       errors: errorCount,
       finalCount
     };
   } catch (e) {
     console.error('Unexpected error in createAmendments:', e);
-    return { 
-      inserted: 0, 
-      skipped: 0, 
-      error: true, 
-      message: `Unexpected error in createAmendments: ${e instanceof Error ? e.message : String(e)}` 
+    return {
+      inserted: 0,
+      skipped: 0,
+      error: true,
+      message: `Unexpected error in createAmendments: ${e instanceof Error ? e.message : String(e)}`
     };
   }
 }
@@ -1499,12 +1610,12 @@ async function getExactTableNames(): Promise<Record<string, string>> {
     const tables = await prisma.$queryRaw`
       SELECT tablename FROM pg_tables WHERE schemaname='public'
     `;
-    
+
     console.log('Available tables in the database:', tables);
-    
+
     // Create map of base table names to actual table names
     const tableMap: Record<string, string> = {};
-    
+
     // Check for exact matches first
     const standardNames = ['smlouva', 'dodavatel', 'dodatek', 'podnet'];
     for (const name of standardNames) {
@@ -1513,7 +1624,7 @@ async function getExactTableNames(): Promise<Record<string, string>> {
         tableMap[name] = name;
       }
     }
-    
+
     // Check for case-insensitive matches if exact matches weren't found
     for (const name of standardNames) {
       if (!tableMap[name]) {
@@ -1525,7 +1636,7 @@ async function getExactTableNames(): Promise<Record<string, string>> {
         }
       }
     }
-    
+
     console.log('Table name mapping:', tableMap);
     return tableMap;
   } catch (error) {
@@ -1544,31 +1655,31 @@ async function getExactTableNames(): Promise<Record<string, string>> {
 export async function syncData() {
   console.log('Starting data synchronization from open data dumps...')
   const startTime = Date.now()
-  
+
   // Load or initialize safe-point
   let safePoint = loadSafePoint();
-  
+
   // Initialize safePoint if we're starting a new sync
   if (safePoint.isComplete || CONFIG.FORCE_RESET_SAFEPOINT) {
     console.log('Previous sync was completed or force reset flag is active. Starting a new sync...');
     safePoint = initSafePoint();
   }
-  
+
   // Get exact table names
   const tableNames = await getExactTableNames();
   const smlouvaTable = tableNames.smlouva || 'smlouva';
-  
+
   // Ensure database schema has required columns
   await ensureDatabaseSchema(tableNames);
-  
+
   // Run diagnostic checks before processing
   await diagnosticCheck(tableNames);
-  
+
   // Calculate the months to download
   // We'll download the last 3 months of data
   const now = new Date()
   const months = []
-  
+
   for (let i = 0; i < CONFIG.MONTHS_TO_PROCESS; i++) {
     const date = new Date(now)
     date.setMonth(now.getMonth() - i)
@@ -1577,7 +1688,7 @@ export async function syncData() {
       month: date.getMonth() + 1
     })
   }
-  
+
   // Skip months that have already been processed completely
   const remainingMonths = months.filter(month => {
     const isProcessed = safePoint.processedMonths.find(
@@ -1585,9 +1696,9 @@ export async function syncData() {
     );
     return !isProcessed;
   });
-  
+
   console.log(`Processing ${remainingMonths.length} months of data (skipping ${months.length - remainingMonths.length} already processed)`);
-  
+
   // Set up overall statistics
   let totalNewCount = safePoint.newContracts || 0;
   let totalUpdatedCount = safePoint.updatedContracts || 0;
@@ -1595,84 +1706,84 @@ export async function syncData() {
   let totalErrorCount = safePoint.errorContracts || 0;
   let totalSuppliers = safePoint.extractedSuppliers || 0;
   let totalAmendments = safePoint.createdAmendments || 0;
-  
+
   // Process each month
   for (const { year, month } of remainingMonths) {
     // Skip if this month is already completed
     const monthIsComplete = safePoint.processedMonths.find(
         m => m.year === year && m.month === month && m.completed
       );
-      
+
       if (monthIsComplete) {
         console.log(`Skipping ${year}-${month} as it was already processed`);
         continue;
       }
-      
+
       try {
         // Update safe-point
         safePoint.currentMonth = { year, month };
         saveSafePoint(safePoint);
-        
+
         // Download and parse the XML dump
         const filePath = await downloadXmlDump(year, month)
         const records = await parseXmlDump(filePath)
-        
+
         console.log(`Processing ${records.length} records for ${year}-${month}...`);
-        
+
         // Update total records in safePoint
         safePoint.totalRecords += records.length;
         saveSafePoint(safePoint);
-        
+
         // Process records in batches
         const batchSize = CONFIG.BATCH_SIZES.CONTRACTS;
-        
+
         // Continue from the last batch if interrupted
-        const startBatch = safePoint.currentMonth?.year === year && 
-                            safePoint.currentMonth?.month === month 
+        const startBatch = safePoint.currentMonth?.year === year &&
+                            safePoint.currentMonth?.month === month
                             ? safePoint.currentBatch : 0;
-        
+
         // Track contract IDs for this entire month
         let monthContractIds: number[] = [];
-        
+
         for (let batchStart = startBatch * batchSize; batchStart < records.length; batchStart += batchSize) {
           // Update current batch
           safePoint.currentBatch = Math.floor(batchStart / batchSize);
           saveSafePoint(safePoint);
-          
+
           console.log(`\n== Processing batch ${safePoint.currentBatch + 1}/${Math.ceil(records.length/batchSize)} for ${year}-${month} ==`);
-          
+
           try {
             // Process a batch of contracts
             if (CONFIG.PHASES.IMPORT_CONTRACTS) {
               const batchResult = await processContractBatch(
-                records, 
-                batchStart, 
-                batchSize, 
+                records,
+                batchStart,
+                batchSize,
                 smlouvaTable,
                 safePoint
               );
-              
+
               // Update statistics
               totalNewCount += batchResult.newCount;
               totalUpdatedCount += batchResult.updatedCount;
               totalSkippedCount += batchResult.skippedCount;
               totalErrorCount += batchResult.errorCount;
-              
+
               // Add contract IDs to the month collection
               if (batchResult.contractIds && batchResult.contractIds.length > 0) {
                 monthContractIds = [...monthContractIds, ...batchResult.contractIds];
                 console.log(`Collected ${batchResult.contractIds.length} contract IDs from this batch, total: ${monthContractIds.length}`);
               }
-              
+
               // Extract suppliers for this batch if we have a significant number of IDs
-              if (CONFIG.PHASES.EXTRACT_SUPPLIERS && batchResult.contractIds.length > 0 && 
+              if (CONFIG.PHASES.EXTRACT_SUPPLIERS && batchResult.contractIds.length > 0 &&
                  (batchResult.contractIds.length >= 50 || batchStart + batchSize >= records.length)) {
                 console.log(`Extracting suppliers for ${batchResult.contractIds.length} contracts...`);
                 const supplierResult = await extractSuppliersFromBatch(tableNames, batchResult.contractIds);
                 totalSuppliers += supplierResult.inserted || 0;
                 safePoint.extractedSuppliers += supplierResult.inserted || 0;
               }
-              
+
               // Create amendments for this batch if we have a significant number of IDs
               if (CONFIG.PHASES.CREATE_AMENDMENTS && batchResult.contractIds.length > 0 &&
                  (batchResult.contractIds.length >= 50 || batchStart + batchSize >= records.length)) {
@@ -1684,26 +1795,26 @@ export async function syncData() {
             } else {
               console.log('Skipping contract import phase (disabled in config)');
             }
-            
+
             // Save progress after each batch
             saveSafePoint(safePoint);
-            
+
           } catch (batchError) {
             console.error(`Error processing batch ${safePoint.currentBatch + 1} for ${year}-${month}:`, batchError);
             safePoint.errors.push(`Batch ${safePoint.currentBatch + 1} error: ${batchError instanceof Error ? batchError.message : String(batchError)}`);
             saveSafePoint(safePoint);
-            
+
             // Continue with the next batch
             continue;
           }
-          
+
           // Log progress after each batch
           console.log(`\nProgress: ${safePoint.processedRecords}/${safePoint.totalRecords} records processed (${Math.round(safePoint.processedRecords/safePoint.totalRecords*100)}%)`);
           console.log(`Contracts: ${safePoint.newContracts} new, ${safePoint.updatedContracts} updated, ${safePoint.skippedContracts} skipped, ${safePoint.errorContracts} errors`);
           console.log(`Suppliers: ${safePoint.extractedSuppliers} extracted`);
           console.log(`Amendments: ${safePoint.createdAmendments} created`);
         }
-        
+
         // After processing all batches for the month, process any remaining contract IDs
         if (CONFIG.PHASES.EXTRACT_SUPPLIERS && monthContractIds.length > 0) {
           console.log(`\n== Extracting suppliers for all ${monthContractIds.length} contracts collected this month ==`);
@@ -1712,7 +1823,7 @@ export async function syncData() {
           safePoint.extractedSuppliers += supplierResult.inserted || 0;
           saveSafePoint(safePoint);
         }
-        
+
         if (CONFIG.PHASES.CREATE_AMENDMENTS && monthContractIds.length > 0) {
           console.log(`\n== Creating amendments for all ${monthContractIds.length} contracts collected this month ==`);
           const amendmentResult = await createAmendmentsForBatch(tableNames, monthContractIds);
@@ -1720,14 +1831,14 @@ export async function syncData() {
           safePoint.createdAmendments += amendmentResult.inserted || 0;
           saveSafePoint(safePoint);
         }
-        
+
         // Mark this month as completed
         safePoint.processedMonths.push({
           year,
           month,
           completed: true
         });
-        
+
         // Add to collected contract IDs
         if (Array.isArray(safePoint.collectedContractIds)) {
           const uniqueIds = monthContractIds.filter(id => !safePoint.collectedContractIds.includes(id));
@@ -1736,23 +1847,23 @@ export async function syncData() {
             console.log(`Added ${uniqueIds.length} unique contract IDs to safe-point collection`);
           }
         }
-        
+
         // Reset currentBatch for the next month
         safePoint.currentBatch = 0;
         saveSafePoint(safePoint);
-        
+
       } catch (monthError) {
         console.error(`Error processing data for ${year}-${month}:`, monthError);
         safePoint.errors.push(`Month ${year}-${month} error: ${monthError instanceof Error ? monthError.message : String(monthError)}`);
         saveSafePoint(safePoint);
-        
+
         // Continue with the next month
         continue;
       }
     }
-    
+
     // After processing all months, make sure we run supplier and amendment phases if needed
-    if (CONFIG.PHASES.EXTRACT_SUPPLIERS && 
+    if (CONFIG.PHASES.EXTRACT_SUPPLIERS &&
         (CONFIG.FORCE_EXTRACT_SUPPLIERS || (safePoint.collectedContractIds && safePoint.collectedContractIds.length > 0))) {
       console.log(`\n== Final supplier extraction phase ==`);
       const contractIds = safePoint.collectedContractIds || [];
@@ -1762,8 +1873,8 @@ export async function syncData() {
       safePoint.extractedSuppliers += supplierResult.inserted || 0;
       saveSafePoint(safePoint);
     }
-    
-    if (CONFIG.PHASES.CREATE_AMENDMENTS && 
+
+    if (CONFIG.PHASES.CREATE_AMENDMENTS &&
         (CONFIG.FORCE_CREATE_AMENDMENTS || (safePoint.collectedContractIds && safePoint.collectedContractIds.length > 0))) {
       console.log(`\n== Final amendment creation phase ==`);
       const contractIds = safePoint.collectedContractIds || [];
@@ -1773,20 +1884,20 @@ export async function syncData() {
       safePoint.createdAmendments += amendmentResult.inserted || 0;
       saveSafePoint(safePoint);
     }
-    
+
     // Final diagnostic check
     console.log('\n=== Running final diagnostic check ===');
     await diagnosticCheck(tableNames);
-    
+
     // Mark sync as complete
     safePoint.isComplete = true;
     safePoint.currentMonth = null;
     safePoint.currentBatch = 0;
     saveSafePoint(safePoint);
-    
+
     const endTime = Date.now();
     const duration = (endTime - startTime) / 1000;
-    
+
     const summary = {
       duration: `${duration} seconds`,
       contracts: {
@@ -1804,19 +1915,19 @@ export async function syncData() {
       },
       errors: safePoint.errors
     };
-    
+
     console.log(`\n=== Synchronization completed in ${duration} seconds ===`);
     console.log(`Contract summary: ${safePoint.processedRecords} processed, ${safePoint.newContracts} new, ${safePoint.updatedContracts} updated, ${safePoint.skippedContracts} skipped, ${safePoint.errorContracts} errors`);
     console.log(`Supplier extraction: ${safePoint.extractedSuppliers} suppliers added`);
     console.log(`Amendment creation: ${safePoint.createdAmendments} amendments created`);
-    
+
     if (safePoint.errors.length > 0) {
       console.log(`\nEncountered ${safePoint.errors.length} errors during processing:`);
       safePoint.errors.forEach((error, index) => {
         console.log(`${index + 1}. ${error}`);
       });
     }
-    
+
     return summary;
 }
 
@@ -1824,13 +1935,13 @@ export async function syncData() {
 export async function directlyExtractSuppliers(): Promise<any> {
   try {
     console.log('Starting direct supplier extraction...');
-    
+
     // Get table names
     const tableNames = await getExactTableNames();
-    
+
     // Run the extraction with empty IDs array (will force fallback behavior)
     const result = await extractSuppliersFromBatch(tableNames, []);
-    
+
     console.log('Direct supplier extraction complete');
     return result;
   } catch (error) {
@@ -1842,13 +1953,13 @@ export async function directlyExtractSuppliers(): Promise<any> {
 export async function directlyCreateAmendments(): Promise<any> {
   try {
     console.log('Starting direct amendment creation...');
-    
+
     // Get table names
     const tableNames = await getExactTableNames();
-    
+
     // Run the amendment creation with empty IDs array (will force fallback behavior)
     const result = await createAmendmentsForBatch(tableNames, []);
-    
+
     console.log('Direct amendment creation complete');
     return result;
   } catch (error) {
