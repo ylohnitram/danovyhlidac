@@ -1186,6 +1186,9 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
     // 3. Process suppliers
     const batchSize = CONFIG.BATCH_SIZES.SUPPLIERS;
     
+    // Counter for generating placeholder ICOs
+    let placeholderCounter = 1;
+    
     for (let i = 0; i < suppliers.length; i += batchSize) {
       const batch = suppliers.slice(i, i + batchSize);
       console.log(`Processing supplier batch ${Math.floor(i/batchSize) + 1} of ${Math.ceil(suppliers.length/batchSize)} (${i+1}-${Math.min(i+batchSize, suppliers.length)} of ${suppliers.length})`);
@@ -1197,12 +1200,24 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
       
       for (const supplier of batch) {
         const supplierName = supplier.dodavatel;
-        const supplierIco = supplier.dodavatel_ico;
+        let supplierIco = supplier.dodavatel_ico;
         
         if (!supplierName || supplierName === 'Neuvedeno') {
           skippedCount++;
           batchSkipped++;
           continue;
+        }
+        
+        // Handle suppliers without an ICO by generating a placeholder
+        if (!supplierIco) {
+          // For suppliers with missing ICO, generate a placeholder ID
+          // Format: UNKNOWN-{supplier-name-hash}-{counter}
+          const nameHash = Buffer.from(supplierName).toString('base64').substring(0, 8);
+          supplierIco = `UNKNOWN-${nameHash}-${placeholderCounter++}`;
+          
+          if (CONFIG.DEBUG) {
+            console.log(`Generated placeholder ICO "${supplierIco}" for supplier "${supplierName}"`);
+          }
         }
         
         try {
@@ -1272,45 +1287,24 @@ async function extractSuppliersFromBatch(tableNames: Record<string, string>, con
           // If supplier doesn't exist, insert with conflict handling
           const currentDate = new Date();
           
-          // Use ON CONFLICT to properly handle unique constraint violations
-          const insertQuery = supplierIco ? 
-            // If we have an ICO, use it in the ON CONFLICT clause
-            `
-              INSERT INTO "${dodavatelTable}" (
-                nazev, 
-                ico, 
-                datum_zalozeni, 
-                created_at, 
-                updated_at
-              ) VALUES (
-                $1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-              )
-              ON CONFLICT (ico) DO NOTHING
-            `
-            :
-            // Without ICO, just use name
-            `
-              INSERT INTO "${dodavatelTable}" (
-                nazev, 
-                ico, 
-                datum_zalozeni, 
-                created_at, 
-                updated_at
-              ) VALUES (
-                $1, NULL, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-              )
-              ON CONFLICT (nazev) DO NOTHING
-            `;
+          // Always use ICO in the query now since we either have a real one or a generated placeholder
+          const insertQuery = `
+            INSERT INTO "${dodavatelTable}" (
+              nazev, 
+              ico, 
+              datum_zalozeni, 
+              created_at, 
+              updated_at
+            ) VALUES (
+              $1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (ico) DO NOTHING
+          `;
           
-          // Execute the query with the right parameters
-          if (supplierIco) {
-            await prisma.$executeRawUnsafe(insertQuery, supplierName, supplierIco, currentDate);
-          } else {
-            await prisma.$executeRawUnsafe(insertQuery, supplierName, currentDate);
-          }
+          await prisma.$executeRawUnsafe(insertQuery, supplierName, supplierIco, currentDate);
           
           if (CONFIG.DEBUG) {
-            console.log(`Inserted supplier "${supplierName}" with ICO ${supplierIco || 'unknown'}`);
+            console.log(`Inserted supplier "${supplierName}" with ICO ${supplierIco}`);
           }
           
           insertedCount++;
