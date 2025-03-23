@@ -1,4 +1,3 @@
-// app/mesta/page.tsx
 import type { Metadata } from "next"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -65,7 +64,7 @@ export default function CitiesPage() {
 
 // The content component that awaits the data
 async function CityListContent() {
-  // Fetch city stats from the database - only actual cities
+  // Fetch city stats from the database - only actual cities, now properly deduplicated
   const cityStats = await fetchActualCityStats();
   
   // Separate cities with contracts and without contracts

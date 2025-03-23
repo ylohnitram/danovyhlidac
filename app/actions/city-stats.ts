@@ -224,10 +224,88 @@ export async function fetchCityStats(): Promise<EntityStats[]> {
 export async function fetchActualCityStats(): Promise<EntityStats[]> {
   const allEntities = await fetchCityStats();
   
-  // Filter to only include actual cities
-  return allEntities.filter(entity => 
-    entity.entityType === "city"
-  );
+  // Create a map to deduplicate cities by normalized name
+  const citiesMap = new Map<string, EntityStats>();
+  
+  // Helper function to normalize city names
+  const normalizeCity = (name: string): string => {
+    // Remove phrases like "statutární město", "hlavní město", etc.
+    let normalized = name.toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")  // Remove diacritics
+      .replace(/(statutarni|hlavni|mestska cast)\s+(mesto|cast)/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+      
+    // Extract just the city name from entities like "Městská část Praha 10"
+    if (normalized.includes("praha")) {
+      // If it's a city district (Praha X), use just "Praha" for grouping
+      normalized = "praha";
+    }
+    
+    return normalized;
+  };
+  
+  // Process all entities of type "city" and properly handle city districts, etc.
+  allEntities
+    .filter(entity => entity.entityType === "city" || entity.name.toLowerCase().includes("praha"))
+    .forEach(entity => {
+      const normalizedName = normalizeCity(entity.name);
+      
+      // Skip entities that don't normalize to a valid city name
+      if (!normalizedName) return;
+      
+      // Find base city data (for proper display name, population, etc.)
+      const baseCity = CITY_BASE_DATA.find(c => 
+        normalizeCity(c.name) === normalizedName || 
+        c.name.toLowerCase().includes(normalizedName)
+      );
+      
+      // If it's not in our base cities list and doesn't look like a city, skip it
+      if (!baseCity && !CITY_BASE_DATA.some(c => normalizedName.includes(normalizeCity(c.name)))) {
+        return;
+      }
+      
+      // If we've already seen this city, update the stats
+      if (citiesMap.has(normalizedName)) {
+        const existingCity = citiesMap.get(normalizedName)!;
+        
+        citiesMap.set(normalizedName, {
+          ...existingCity,
+          contractsCount: existingCity.contractsCount + entity.contractsCount,
+          totalValue: existingCity.totalValue + entity.totalValue,
+          // Prefer the base city data for name and population
+          name: baseCity?.name || existingCity.name,
+          population: baseCity?.population || existingCity.population,
+        });
+      } else {
+        // Use base city data where available
+        citiesMap.set(normalizedName, {
+          id: baseCity?.id || entity.id,
+          name: baseCity?.name || entity.name,
+          population: baseCity?.population || entity.population,
+          contractsCount: entity.contractsCount,
+          totalValue: entity.totalValue,
+          entityType: "city",
+        });
+      }
+    });
+  
+  // Add any missing base cities with zero contracts
+  CITY_BASE_DATA.forEach(baseCity => {
+    const normalizedName = normalizeCity(baseCity.name);
+    
+    if (!citiesMap.has(normalizedName)) {
+      citiesMap.set(normalizedName, {
+        ...baseCity,
+        contractsCount: 0,
+        totalValue: 0,
+      });
+    }
+  });
+  
+  // Convert map back to array and sort by population (descending)
+  return Array.from(citiesMap.values()).sort((a, b) => b.population - a.population);
 }
 
 /**
