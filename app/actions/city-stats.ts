@@ -30,22 +30,7 @@ const CITY_BASE_DATA = [
   { id: "decin", name: "Děčín", population: 49000, entityType: "city" as EntityType },
 ];
 
-// Známé instituce a jejich typy
-const KNOWN_INSTITUTIONS = [
-  { pattern: /fakultní nemocnice/i, type: "institution" },
-  { pattern: /nemocnice/i, type: "institution" },
-  { pattern: /úřad/i, type: "institution" },
-  { pattern: /ministerstvo/i, type: "institution" },
-  { pattern: /dopravní podnik/i, type: "company" },
-  { pattern: /kraj$/i, type: "institution" },
-  { pattern: /univerzita/i, type: "institution" },
-  { pattern: /vysoká škola/i, type: "institution" },
-  { pattern: /záchranná služba/i, type: "institution" },
-  { pattern: /statutární město/i, type: "city" },
-  { pattern: /hlavní město/i, type: "city" },
-];
-
-// Typ pro statistiky měst/institucí
+// Typ pro statistiky měst
 export type EntityStats = {
   id: string;
   name: string;
@@ -56,129 +41,88 @@ export type EntityStats = {
 };
 
 /**
- * Detekuje typ entity podle názvu
- */
-function detectEntityType(name: string): EntityType {
-  // Nejprve zkontrolovat, zda jde o známou instituci
-  for (const inst of KNOWN_INSTITUTIONS) {
-    if (inst.pattern.test(name)) {
-      return inst.type;
-    }
-  }
-  
-  // Zkontrolovat, zda jde o město ze základního seznamu
-  const isCityInBaseList = CITY_BASE_DATA.some(city => 
-    city.name.toLowerCase() === name.toLowerCase() ||
-    name.toLowerCase().includes(city.name.toLowerCase())
-  );
-  
-  if (isCityInBaseList) {
-    return "city";
-  }
-  
-  return "other";
-}
-
-/**
- * Generuje ID z názvu entity
- */
-function generateIdFromName(name: string): string {
-  return name.toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")  // Odstranit diakritiku
-    .replace(/[^a-z0-9]/g, "-")      // Nahradit nealfanumerické znaky pomlčkami
-    .replace(/-+/g, "-")              // Nahradit více pomlček jednou
-    .replace(/^-|-$/g, "");           // Odstranit pomlčky na začátku a konci
-}
-
-/**
- * Extracte city name from address
+ * Extracts city name from Czech address
  */
 function extractCityFromAddress(address: string | null): string | null {
   if (!address) return null;
   
-  // Try to extract city from address
-  // Typical format is "Street, City" or "Street, ZIP City"
+  // Common city name patterns in Czech addresses
+  // Typical format: "Street 123, 123 45 CityName" or "Street 123, CityName"
+  
+  // Split by comma to separate street from city/zip
   const parts = address.split(',');
-  if (parts.length > 1) {
-    const lastPart = parts[parts.length - 1].trim();
-    // Check if there's a ZIP code (typically 5 digits in Czech Republic)
-    const zipMatch = lastPart.match(/^\d{3}\s*\d{2}\s+(.+)$/);
-    if (zipMatch && zipMatch[1]) {
-      return zipMatch[1].trim();
-    }
-    // Otherwise use the last part as city
-    return lastPart;
+  if (parts.length < 2) return null; // No comma found
+  
+  // Get the last part (should be city and possibly ZIP)
+  const cityPart = parts[parts.length - 1].trim();
+  
+  // Try to match patterns with ZIP code
+  // Czech ZIP is 3 digits, space, 2 digits, then city name
+  const zipCityPattern = /^\d{3}\s*\d{2}\s+(.+)$/;
+  const zipMatch = cityPart.match(zipCityPattern);
+  
+  if (zipMatch && zipMatch[1]) {
+    return zipMatch[1].trim();
   }
   
-  return null;
+  // If no ZIP pattern found, use the whole part after comma
+  return cityPart;
 }
 
 /**
- * Helper to get city name from entity name
+ * Normalizes a city name to a standard form
  */
-function getCityNameFromEntity(name: string): string | null {
-  // Known patterns where city name appears in entity name
-  const patterns = [
-    /(?:statutární|hlavní) město ([A-ZÁ-Ž][a-zá-ž]+)/i,  // "Statutární město Brno" -> "Brno"
-    /^(?:město|obec) ([A-ZÁ-Ž][a-zá-ž]+)/i,  // "Město Plzeň" -> "Plzeň"
-    /^([A-ZÁ-Ž][a-zá-ž]+)$/i,  // Just the city name like "Olomouc"
-    /městská část ([A-ZÁ-Ž][a-zá-ž]+)/i,  // "Městská část Praha" -> "Praha"
-  ];
+function normalizeCityName(city: string): string {
+  if (!city) return '';
   
-  for (const pattern of patterns) {
-    const match = name.match(pattern);
-    if (match && match[1]) {
-      return match[1];
-    }
-  }
-  
-  // Special case for Prague districts
-  if (/praha \d+/i.test(name) || /praha-[a-zá-ž]+/i.test(name)) {
-    return "Praha";
-  }
-  
-  return null;
-}
-
-/**
- * Normalized city to base form
- */
-function normalizeCityName(name: string): string {
-  const normalized = name.toLowerCase()
+  // Basic normalization
+  let normalized = city.toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")  // Remove diacritics
+    .replace(/[\u0300-\u036f]/g, "") // Remove diacritics
     .trim();
   
-  // Special cases for common city name variations
-  if (normalized.includes("prag") || normalized.includes("prah")) {
-    return "praha";
-  }
+  // Remove any " - " with suffixes (like "Frýdek-Místek - Frýdek")
+  normalized = normalized.replace(/\s+-\s+.*$/, '');
   
-  // For other cities, normalize and match against base data
-  for (const city of CITY_BASE_DATA) {
-    const baseCityNormalized = city.name
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "");
-    
-    if (normalized === baseCityNormalized || 
-        normalized.includes(baseCityNormalized) || 
-        baseCityNormalized.includes(normalized)) {
-      return baseCityNormalized;
-    }
+  // Keep only the first part of "Praha X" or similar
+  if (normalized.startsWith('praha ')) {
+    normalized = 'praha';
   }
   
   return normalized;
 }
 
 /**
- * Fetches statistics about cities and their contract counts from the database
+ * Get the base city data for a city name
  */
-export async function fetchCityStats(): Promise<EntityStats[]> {
+function getBaseCityData(cityName: string): (typeof CITY_BASE_DATA)[0] | null {
+  if (!cityName) return null;
+  
+  const normalizedName = normalizeCityName(cityName);
+  
+  // Find exact match
+  const exactMatch = CITY_BASE_DATA.find(city => 
+    normalizeCityName(city.name) === normalizedName
+  );
+  
+  if (exactMatch) return exactMatch;
+  
+  // Find partial match
+  const partialMatch = CITY_BASE_DATA.find(city => 
+    normalizedName.includes(normalizeCityName(city.name)) ||
+    normalizeCityName(city.name).includes(normalizedName)
+  );
+  
+  return partialMatch || null;
+}
+
+/**
+ * Fetches only city-based statistics by grouping all contracts by city from address
+ */
+export async function fetchActualCityStats(): Promise<EntityStats[]> {
   try {
     // Try to get from cache first
-    const cachedData = await getCachedStats("cityStats");
+    const cachedData = await getCachedStats("cityStatsByAddress");
     if (cachedData) {
       return cachedData;
     }
@@ -207,193 +151,106 @@ export async function fetchCityStats(): Promise<EntityStats[]> {
       }));
       
       // Cache this data briefly (5 minutes)
-      await cacheStats("cityStats", fallbackData, 300);
+      await cacheStats("cityStatsByAddress", fallbackData, 300);
       
       return fallbackData;
     }
 
     // Check if zadavatel_adresa column exists
     const hasAddressCol = await checkColumnExists(smlouvaTable, 'zadavatel_adresa');
-
-    // Get stats by zadavatel with address for city grouping
-    let rawQuery;
-    if (hasAddressCol) {
-      rawQuery = `
-        SELECT 
-          zadavatel as entity_name,
-          zadavatel_adresa as address,
-          COUNT(*) as contract_count,
-          SUM(castka) as total_value
-        FROM "${smlouvaTable}"
-        WHERE zadavatel IS NOT NULL AND zadavatel != 'Neuvedeno'
-        GROUP BY zadavatel, zadavatel_adresa
-        ORDER BY COUNT(*) DESC
-        LIMIT 200
-      `;
-    } else {
-      // Fallback if no address column exists
-      rawQuery = `
-        SELECT 
-          zadavatel as entity_name,
-          NULL as address,
-          COUNT(*) as contract_count,
-          SUM(castka) as total_value
-        FROM "${smlouvaTable}"
-        WHERE zadavatel IS NOT NULL AND zadavatel != 'Neuvedeno'
-        GROUP BY zadavatel
-        ORDER BY COUNT(*) DESC
-        LIMIT 200
-      `;
+    
+    if (!hasAddressCol) {
+      console.warn("zadavatel_adresa column not found in database, using fallback data");
+      return CITY_BASE_DATA.map(city => ({
+        ...city,
+        contractsCount: 0,
+        totalValue: 0
+      }));
     }
 
-    const statsByEntity = await prisma.$queryRawUnsafe(rawQuery);
-
-    // Transform data and categorize entities
-    const entitiesData: EntityStats[] = [];
+    // Get all contracts with addresses
+    const contractAddresses = await prisma.$queryRawUnsafe(`
+      SELECT 
+        zadavatel_adresa as address,
+        COUNT(*) as contract_count, 
+        SUM(castka) as total_value
+      FROM "${smlouvaTable}"
+      WHERE zadavatel_adresa IS NOT NULL AND zadavatel_adresa != ''
+      GROUP BY zadavatel_adresa
+    `);
     
-    // Prepare city data map for grouping
-    const cityDataMap = new Map<string, {
-      id: string;
-      name: string;
-      population: number;
-      contractsCount: number;
-      totalValue: number;
-      entityType: EntityType;
-    }>();
+    // Map to track cities and their contract stats
+    const cityStatsMap = new Map<string, EntityStats>();
     
-    if (Array.isArray(statsByEntity)) {
-      for (const item of statsByEntity) {
-        const entityName = item.entity_name || 'Neuvedeno';
-        const entityAddress = item.address;
+    // First add all base cities with zero counts
+    for (const baseCity of CITY_BASE_DATA) {
+      cityStatsMap.set(normalizeCityName(baseCity.name), {
+        ...baseCity,
+        contractsCount: 0,
+        totalValue: 0
+      });
+    }
+    
+    // Process each address and aggregate stats by city
+    if (Array.isArray(contractAddresses)) {
+      for (const item of contractAddresses) {
+        const address = item.address;
         const contractCount = parseInt(item.contract_count || '0');
         const totalValue = parseFloat(item.total_value || '0');
         
-        // Skip entities with too few contracts
-        if (contractCount < 2) continue;
+        // Extract city from address
+        const cityName = extractCityFromAddress(address);
+        if (!cityName) continue;
         
-        // Detect entity type
-        const entityType = detectEntityType(entityName);
+        // Normalize the city name
+        const normalizedCity = normalizeCityName(cityName);
+        if (!normalizedCity) continue;
         
-        // Try to extract city from entity name or address
-        let cityName = null;
+        // Find base city data
+        const baseCity = getBaseCityData(cityName);
         
-        // First try to get city from entity name
-        cityName = getCityNameFromEntity(entityName);
-        
-        // If unsuccessful, try to extract from address
-        if (!cityName && entityAddress) {
-          cityName = extractCityFromAddress(entityAddress);
+        if (cityStatsMap.has(normalizedCity)) {
+          // Update existing city stats
+          const existingStats = cityStatsMap.get(normalizedCity)!;
+          cityStatsMap.set(normalizedCity, {
+            ...existingStats,
+            contractsCount: existingStats.contractsCount + contractCount,
+            totalValue: existingStats.totalValue + totalValue
+          });
+        } else if (baseCity) {
+          // New city found matching one of our base cities
+          cityStatsMap.set(normalizedCity, {
+            id: baseCity.id,
+            name: baseCity.name, 
+            population: baseCity.population,
+            contractsCount: contractCount,
+            totalValue: totalValue,
+            entityType: "city"
+          });
+        } else {
+          // New city not in our base list
+          cityStatsMap.set(normalizedCity, {
+            id: normalizedCity.replace(/\s+/g, '-'),
+            name: cityName,
+            population: 0, // Unknown population
+            contractsCount: contractCount,
+            totalValue: totalValue,
+            entityType: "city"
+          });
         }
-        
-        // If we found a city, add stats to that city
-        if (cityName) {
-          const normalizedCityName = normalizeCityName(cityName);
-          
-          // Find base city data for more precise information
-          const baseCity = CITY_BASE_DATA.find(city => 
-            normalizeCityName(city.name) === normalizedCityName
-          );
-          
-          // Skip if we can't find a matching base city and the entity is not explicitly a city
-          if (!baseCity && entityType !== "city") {
-            // This is an institution in some unknown city, skip it
-            continue;
-          }
-          
-          // Use base city data where available
-          const cityId = baseCity?.id || generateIdFromName(cityName);
-          const cityDisplayName = baseCity?.name || cityName;
-          const cityPopulation = baseCity?.population || 0;
-          
-          // Update or create city data
-          if (cityDataMap.has(normalizedCityName)) {
-            // Update existing city
-            const existingCity = cityDataMap.get(normalizedCityName)!;
-            cityDataMap.set(normalizedCityName, {
-              ...existingCity,
-              contractsCount: existingCity.contractsCount + contractCount,
-              totalValue: existingCity.totalValue + totalValue,
-            });
-          } else {
-            // Create new city entry
-            cityDataMap.set(normalizedCityName, {
-              id: cityId,
-              name: cityDisplayName,
-              population: cityPopulation,
-              contractsCount: contractCount,
-              totalValue: totalValue,
-              entityType: "city"
-            });
-          }
-        }
-        else if (entityType === "city") {
-          // This is explicitly a city but we couldn't extract a standard city name
-          // Use the entity name as is
-          const entityId = generateIdFromName(entityName);
-          
-          // Find population for known cities
-          let population = 0;
-          const baseCity = CITY_BASE_DATA.find(city => 
-            city.name.toLowerCase() === entityName.toLowerCase() ||
-            entityName.toLowerCase().includes(city.name.toLowerCase())
-          );
-          
-          if (baseCity) {
-            population = baseCity.population;
-          }
-          
-          const normalizedName = normalizeCityName(entityName);
-          
-          // Update or create city data
-          if (cityDataMap.has(normalizedName)) {
-            // Update existing city
-            const existingCity = cityDataMap.get(normalizedName)!;
-            cityDataMap.set(normalizedName, {
-              ...existingCity,
-              contractsCount: existingCity.contractsCount + contractCount,
-              totalValue: existingCity.totalValue + totalValue,
-            });
-          } else {
-            // Create new city entry
-            cityDataMap.set(normalizedName, {
-              id: entityId,
-              name: baseCity?.name || entityName,
-              population,
-              contractsCount: contractCount,
-              totalValue: totalValue,
-              entityType: "city"
-            });
-          }
-        }
-        // Else this is an institution or company without city info, skip it for the cities page
       }
     }
     
-    // Convert city map to array
-    const cityArray = Array.from(cityDataMap.values());
-    
-    // Add cities from base data that aren't in the results
-    for (const baseCity of CITY_BASE_DATA) {
-      const normalizedName = normalizeCityName(baseCity.name);
-      
-      if (!cityDataMap.has(normalizedName)) {
-        cityArray.push({
-          ...baseCity,
-          contractsCount: 0,
-          totalValue: 0
-        });
-      }
-    }
-    
-    // Sort by contract count (descending)
-    const sortedData = cityArray.sort((a, b) => b.contractsCount - a.contractsCount);
+    // Convert map to array and sort by contract count (descending)
+    const cityStats = Array.from(cityStatsMap.values())
+      .sort((a, b) => b.contractsCount - a.contractsCount);
     
     // Cache the results
-    await cacheStats("cityStats", sortedData);
+    await cacheStats("cityStatsByAddress", cityStats);
     
-    return sortedData;
+    return cityStats;
   } catch (error) {
-    console.error("Error fetching city stats:", error);
+    console.error("Error fetching city stats by address:", error);
     
     // Return base data with zero counts in case of error
     const fallbackData = CITY_BASE_DATA.map(city => ({
@@ -407,25 +264,11 @@ export async function fetchCityStats(): Promise<EntityStats[]> {
 }
 
 /**
- * Fetch stats for actual cities only (filtering out other entities)
+ * Fetches all entities stats (legacy function for backward compatibility)
  */
-export async function fetchActualCityStats(): Promise<EntityStats[]> {
-  const cityStats = await fetchCityStats();
-  
-  // We already have city stats grouped by city, just return them
-  return cityStats;
-}
-
-/**
- * Fetch stats for institutions only (filtering out cities and other entities)
- */
-export async function fetchInstitutionStats(): Promise<EntityStats[]> {
-  const allEntities = await fetchCityStats();
-  
-  // Filter to only include institutions
-  return allEntities.filter(entity => 
-    entity.entityType === "institution"
-  );
+export async function fetchCityStats(): Promise<EntityStats[]> {
+  // Now just calling the actual city stats function
+  return fetchActualCityStats();
 }
 
 /**
@@ -441,13 +284,13 @@ export async function fetchEntityDetail(entityId: string) {
       return cachedData;
     }
     
-    // Get all entity data
-    const allEntities = await fetchCityStats();
+    // Get all city data
+    const allCities = await fetchActualCityStats();
     
-    // Find the specific entity
-    const entity = allEntities.find(e => e.id === entityId);
+    // Find the specific city
+    const city = allCities.find(c => c.id === entityId);
     
-    if (!entity) {
+    if (!city) {
       return null;
     }
     
@@ -463,38 +306,82 @@ export async function fetchEntityDetail(entityId: string) {
       ? tableInfo[0].tablename 
       : 'smlouva';
     
-    // Get entity-specific contract stats
-    const stats = await prisma.$queryRawUnsafe(`
-      SELECT 
-        COUNT(*) as contract_count,
-        SUM(castka) as total_value,
-        AVG(castka) as avg_value,
-        MAX(castka) as max_value,
-        MIN(datum) as earliest_date,
-        MAX(datum) as latest_date,
-        COUNT(DISTINCT dodavatel) as supplier_count
-      FROM "${smlouvaTable}"
-      WHERE zadavatel = $1
-    `, entity.name);
+    // Check if zadavatel_adresa column exists
+    const hasAddressCol = await checkColumnExists(smlouvaTable, 'zadavatel_adresa');
+    
+    // Prepare query based on whether address column exists
+    let cityQuery;
+    if (hasAddressCol) {
+      // Match all contracts where address contains the city name
+      cityQuery = `
+        SELECT 
+          COUNT(*) as contract_count,
+          SUM(castka) as total_value,
+          AVG(castka) as avg_value,
+          MAX(castka) as max_value,
+          MIN(datum) as earliest_date,
+          MAX(datum) as latest_date,
+          COUNT(DISTINCT dodavatel) as supplier_count
+        FROM "${smlouvaTable}"
+        WHERE zadavatel_adresa LIKE $1
+      `;
+    } else {
+      // Fallback if no address column - use zadavatel containing city name
+      cityQuery = `
+        SELECT 
+          COUNT(*) as contract_count,
+          SUM(castka) as total_value,
+          AVG(castka) as avg_value,
+          MAX(castka) as max_value,
+          MIN(datum) as earliest_date,
+          MAX(datum) as latest_date,
+          COUNT(DISTINCT dodavatel) as supplier_count
+        FROM "${smlouvaTable}"
+        WHERE zadavatel LIKE $1
+      `;
+    }
+    
+    // Run the query with the city name as a parameter
+    const searchPattern = `%${city.name}%`;
+    const stats = await prisma.$queryRawUnsafe(cityQuery, searchPattern);
     
     const entityStats = Array.isArray(stats) && stats.length > 0 ? stats[0] : null;
     
-    // Get top suppliers for this entity
-    const topSuppliers = await prisma.$queryRawUnsafe(`
-      SELECT 
-        dodavatel,
-        COUNT(*) as contract_count,
-        SUM(castka) as total_value
-      FROM "${smlouvaTable}"
-      WHERE zadavatel = $1
-      GROUP BY dodavatel
-      ORDER BY SUM(castka) DESC
-      LIMIT 5
-    `, entity.name);
+    // Get top suppliers for this city
+    let suppliersQuery;
+    if (hasAddressCol) {
+      // Using address column
+      suppliersQuery = `
+        SELECT 
+          dodavatel,
+          COUNT(*) as contract_count,
+          SUM(castka) as total_value
+        FROM "${smlouvaTable}"
+        WHERE zadavatel_adresa LIKE $1
+        GROUP BY dodavatel
+        ORDER BY SUM(castka) DESC
+        LIMIT 5
+      `;
+    } else {
+      // Fallback
+      suppliersQuery = `
+        SELECT 
+          dodavatel,
+          COUNT(*) as contract_count,
+          SUM(castka) as total_value
+        FROM "${smlouvaTable}"
+        WHERE zadavatel LIKE $1
+        GROUP BY dodavatel
+        ORDER BY SUM(castka) DESC
+        LIMIT 5
+      `;
+    }
+    
+    const topSuppliers = await prisma.$queryRawUnsafe(suppliersQuery, searchPattern);
     
     // Combine all the data
-    const entityDetail = {
-      ...entity,
+    const cityDetail = {
+      ...city,
       stats: entityStats || {
         contract_count: 0,
         total_value: 0,
@@ -508,11 +395,11 @@ export async function fetchEntityDetail(entityId: string) {
     };
     
     // Cache the detail
-    await cacheStats(cacheKey, entityDetail);
+    await cacheStats(cacheKey, cityDetail);
     
-    return entityDetail;
+    return cityDetail;
   } catch (error) {
-    console.error(`Error fetching details for entity ${entityId}:`, error);
+    console.error(`Error fetching details for city ${entityId}:`, error);
     return null;
   }
 }
