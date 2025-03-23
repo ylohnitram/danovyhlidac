@@ -27,12 +27,12 @@ import { fetchSmlouvy, refreshSmlouvy, type FetchSmlouvyParams, type Smlouva } f
 
 // Categories for filtering
 const CATEGORIES = [
-  { id: "", name: "Všechny kategorie" },
+  { id: "all", name: "Všechny kategorie" },
   { id: "verejne-zakazky", name: "Veřejné zakázky" },
   { id: "dotace", name: "Dotace a granty" },
   { id: "prodej-majetku", name: "Prodej majetku" },
   { id: "najem", name: "Nájem" },
-  { id: "ostatni", name: "Ostatní" },
+  { id: "ostatni", name: "Ostatní" }
 ]
 
 export default function ContractsList() {
@@ -58,7 +58,7 @@ export default function ContractsList() {
 
   // State for search form
   const [searchQuery, setSearchQuery] = useState(query)
-  const [selectedCategory, setSelectedCategory] = useState(category)
+  const [selectedCategory, setSelectedCategory] = useState(category || "all")
   const [refreshing, setRefreshing] = useState(false)
 
   // State for cache info
@@ -74,7 +74,7 @@ export default function ContractsList() {
         // Prepare params for the server action
         const params: FetchSmlouvyParams = {
           query: query || undefined,
-          kategorie: category || undefined,
+          kategorie: category && category !== "all" ? category : undefined,
           page,
           limit: 10,
         }
@@ -114,7 +114,7 @@ export default function ContractsList() {
     // Update URL with search params
     const params = new URLSearchParams()
     if (searchQuery) params.set("q", searchQuery)
-    if (selectedCategory) params.set("kategorie", selectedCategory)
+    if (selectedCategory && selectedCategory !== "all") params.set("kategorie", selectedCategory)
     params.set("page", "1") // Reset to first page on new search
 
     router.push(`/smlouvy?${params.toString()}`)
@@ -130,7 +130,7 @@ export default function ContractsList() {
       // Reload the current page with skipCache=true
       const params: FetchSmlouvyParams = {
         query: query || undefined,
-        kategorie: category || undefined,
+        kategorie: category && category !== "all" ? category : undefined,
         page,
         limit: 10,
         skipCache: true,
@@ -188,7 +188,7 @@ export default function ContractsList() {
         <PaginationLink
           href={`/smlouvy?${new URLSearchParams({
             ...(query ? { q: query } : {}),
-            ...(category ? { kategorie: category } : {}),
+            ...(category && category !== "all" ? { kategorie: category } : {}),
             page: "1",
           })}`}
           isActive={pagination.page === 1}
@@ -214,7 +214,7 @@ export default function ContractsList() {
           <PaginationLink
             href={`/smlouvy?${new URLSearchParams({
               ...(query ? { q: query } : {}),
-              ...(category ? { kategorie: category } : {}),
+              ...(category && category !== "all" ? { kategorie: category } : {}),
               page: i.toString(),
             })}`}
             isActive={pagination.page === i}
@@ -237,7 +237,7 @@ export default function ContractsList() {
           <PaginationLink
             href={`/smlouvy?${new URLSearchParams({
               ...(query ? { q: query } : {}),
-              ...(category ? { kategorie: category } : {}),
+              ...(category && category !== "all" ? { kategorie: category } : {}),
               page: pagination.totalPages.toString(),
             })}`}
             isActive={pagination.page === pagination.totalPages}
@@ -309,7 +309,7 @@ export default function ContractsList() {
                   , hledáno: <strong>{query}</strong>
                 </>
               )}
-              {category && (
+              {category && category !== "all" && (
                 <>
                   , kategorie: <strong>{CATEGORIES.find((c) => c.id === category)?.name || category}</strong>
                 </>
@@ -323,7 +323,7 @@ export default function ContractsList() {
                   , hledáno: <strong>{query}</strong>
                 </>
               )}
-              {category && (
+              {category && category !== "all" && (
                 <>
                   , kategorie: <strong>{CATEGORIES.find((c) => c.id === category)?.name || category}</strong>
                 </>
@@ -405,7 +405,7 @@ export default function ContractsList() {
                         pagination.page > 1
                           ? `/smlouvy?${new URLSearchParams({
                               ...(query ? { q: query } : {}),
-                              ...(category ? { kategorie: category } : {}),
+                              ...(category && category !== "all" ? { kategorie: category } : {}),
                               page: (pagination.page - 1).toString(),
                             })}`
                           : undefined
@@ -420,7 +420,7 @@ export default function ContractsList() {
                         pagination.page < pagination.totalPages
                           ? `/smlouvy?${new URLSearchParams({
                               ...(query ? { q: query } : {}),
-                              ...(category ? { kategorie: category } : {}),
+                              ...(category && category !== "all" ? { kategorie: category } : {}),
                               page: (pagination.page + 1).toString(),
                             })}`
                           : undefined
@@ -441,7 +441,7 @@ export default function ContractsList() {
                   variant="outline"
                   onClick={() => {
                     setSearchQuery("")
-                    setSelectedCategory("")
+                    setSelectedCategory("all")
                     router.push("/smlouvy")
                   }}
                 >
@@ -455,4 +455,3 @@ export default function ContractsList() {
     </div>
   )
 }
-
