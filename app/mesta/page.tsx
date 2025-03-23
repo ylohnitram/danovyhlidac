@@ -138,7 +138,7 @@ function CityCard({ city }: { city: any }) {
               </div>
             </div>
             <Button asChild>
-              <Link href={`/mesto/${city.id}`} className="w-full flex items-center justify-center">
+              <Link href={`/zadavatel/${city.id}`} className="w-full flex items-center justify-center">
                 Prozkoumat zakázky
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
