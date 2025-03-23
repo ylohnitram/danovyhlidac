@@ -41,32 +41,28 @@ export type EntityStats = {
 };
 
 /**
- * Extracts city name from Czech address
+ * Extracts city name from Czech address by matching with predefined city list
  */
 function extractCityFromAddress(address: string | null): string | null {
   if (!address) return null;
   
-  // Common city name patterns in Czech addresses
-  // Typical format: "Street 123, 123 45 CityName" or "Street 123, CityName"
+  // First normalize the address for matching
+  const normalizedAddress = address.toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, ""); // Remove diacritics
   
-  // Split by comma to separate street from city/zip
-  const parts = address.split(',');
-  if (parts.length < 2) return null; // No comma found
-  
-  // Get the last part (should be city and possibly ZIP)
-  const cityPart = parts[parts.length - 1].trim();
-  
-  // Try to match patterns with ZIP code
-  // Czech ZIP is 3 digits, space, 2 digits, then city name
-  const zipCityPattern = /^\d{3}\s*\d{2}\s+(.+)$/;
-  const zipMatch = cityPart.match(zipCityPattern);
-  
-  if (zipMatch && zipMatch[1]) {
-    return zipMatch[1].trim();
+  // Try to match any of our predefined cities in the address
+  for (const city of CITY_BASE_DATA) {
+    const normalizedCityName = normalizeCityName(city.name);
+    
+    // Check if the normalized city name appears in the address
+    if (normalizedAddress.includes(normalizedCityName)) {
+      return city.name; // Return the properly formatted city name
+    }
   }
   
-  // If no ZIP pattern found, use the whole part after comma
-  return cityPart;
+  // No match found in our predefined list
+  return null;
 }
 
 /**
@@ -98,6 +94,7 @@ function normalizeCityName(city: string): string {
 function getBaseCityData(cityName: string): (typeof CITY_BASE_DATA)[0] | null {
   if (!cityName) return null;
   
+  // Exact match by name (case-insensitive)
   const normalizedName = normalizeCityName(cityName);
   
   // Find exact match
@@ -117,7 +114,7 @@ function getBaseCityData(cityName: string): (typeof CITY_BASE_DATA)[0] | null {
 }
 
 /**
- * Fetches only city-based statistics by grouping all contracts by city from address
+ * Fetches city-based statistics by grouping all contracts by city from address
  */
 export async function fetchActualCityStats(): Promise<EntityStats[]> {
   try {
@@ -168,6 +165,16 @@ export async function fetchActualCityStats(): Promise<EntityStats[]> {
       }));
     }
 
+    // Initialize city stats map with base cities (all have 0 contracts by default)
+    const cityStatsMap = new Map<string, EntityStats>();
+    for (const baseCity of CITY_BASE_DATA) {
+      cityStatsMap.set(baseCity.id, {
+        ...baseCity,
+        contractsCount: 0,
+        totalValue: 0
+      });
+    }
+    
     // Get all contracts with addresses
     const contractAddresses = await prisma.$queryRawUnsafe(`
       SELECT 
@@ -179,63 +186,32 @@ export async function fetchActualCityStats(): Promise<EntityStats[]> {
       GROUP BY zadavatel_adresa
     `);
     
-    // Map to track cities and their contract stats
-    const cityStatsMap = new Map<string, EntityStats>();
-    
-    // First add all base cities with zero counts
-    for (const baseCity of CITY_BASE_DATA) {
-      cityStatsMap.set(normalizeCityName(baseCity.name), {
-        ...baseCity,
-        contractsCount: 0,
-        totalValue: 0
-      });
-    }
-    
-    // Process each address and aggregate stats by city
+    // Process contract addresses and match with cities
     if (Array.isArray(contractAddresses)) {
       for (const item of contractAddresses) {
         const address = item.address;
         const contractCount = parseInt(item.contract_count || '0');
         const totalValue = parseFloat(item.total_value || '0');
         
+        // Skip if no valid data
+        if (!address || contractCount <= 0) continue;
+        
         // Extract city from address
         const cityName = extractCityFromAddress(address);
         if (!cityName) continue;
         
-        // Normalize the city name
-        const normalizedCity = normalizeCityName(cityName);
-        if (!normalizedCity) continue;
-        
-        // Find base city data
+        // Get the base city data
         const baseCity = getBaseCityData(cityName);
+        if (!baseCity) continue; // Skip if not in our predefined list
         
-        if (cityStatsMap.has(normalizedCity)) {
-          // Update existing city stats
-          const existingStats = cityStatsMap.get(normalizedCity)!;
-          cityStatsMap.set(normalizedCity, {
+        // Update city stats
+        const cityId = baseCity.id;
+        if (cityStatsMap.has(cityId)) {
+          const existingStats = cityStatsMap.get(cityId)!;
+          cityStatsMap.set(cityId, {
             ...existingStats,
             contractsCount: existingStats.contractsCount + contractCount,
             totalValue: existingStats.totalValue + totalValue
-          });
-        } else if (baseCity) {
-          // New city found matching one of our base cities
-          cityStatsMap.set(normalizedCity, {
-            id: baseCity.id,
-            name: baseCity.name, 
-            population: baseCity.population,
-            contractsCount: contractCount,
-            totalValue: totalValue,
-            entityType: "city"
-          });
-        } else {
-          // New city not in our base list
-          cityStatsMap.set(normalizedCity, {
-            id: normalizedCity.replace(/\s+/g, '-'),
-            name: cityName,
-            population: 0, // Unknown population
-            contractsCount: contractCount,
-            totalValue: totalValue,
-            entityType: "city"
           });
         }
       }
