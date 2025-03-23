@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db-init"
 import { getCachedStats, cacheStats } from "@/lib/cache"
 
 // Definice typů entit
-export type EntityType = "city" | "institution" | "company" | "other";
+export type EntityType = "city" | "institution" | "company" | "other" | "uncategorized";
 
 // Základní data měst
 const CITY_BASE_DATA = [
@@ -30,6 +30,14 @@ const CITY_BASE_DATA = [
   { id: "decin", name: "Děčín", population: 49000, entityType: "city" as EntityType },
 ];
 
+// Speciální entita pro nezařazené položky
+const UNCATEGORIZED_ENTITY = {
+  id: "nezarazeno",
+  name: "Nezařazeno",
+  population: 0,
+  entityType: "uncategorized" as EntityType
+};
+
 // Typ pro statistiky měst
 export type EntityStats = {
   id: string;
@@ -41,32 +49,56 @@ export type EntityStats = {
 };
 
 /**
- * Extracts city name from Czech address by matching with predefined city list
+ * Zjistí, zda se jedná o město ze seznamu
  */
-function extractCityFromAddress(address: string | null): string | null {
-  if (!address) return null;
+function isCityFromList(cityName: string): boolean {
+  const normalizedName = normalizeCityName(cityName);
   
-  // First normalize the address for matching
-  const normalizedAddress = address.toLowerCase()
+  return CITY_BASE_DATA.some(city => 
+    normalizeCityName(city.name) === normalizedName
+  );
+}
+
+/**
+ * Normalizuje a extrahuje jméno města z textu
+ */
+function extractCityFromText(text: string): string | null {
+  if (!text) return null;
+  
+  // Normalize for matching
+  const normalizedText = text.toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, ""); // Remove diacritics
   
-  // Try to match any of our predefined cities in the address
+  // Try to match any of our predefined cities in the text
   for (const city of CITY_BASE_DATA) {
     const normalizedCityName = normalizeCityName(city.name);
     
-    // Check if the normalized city name appears in the address
-    if (normalizedAddress.includes(normalizedCityName)) {
-      return city.name; // Return the properly formatted city name
+    // Check if the normalized city name appears in the text
+    if (normalizedText.includes(normalizedCityName)) {
+      return city.name; // Return the proper city name
     }
   }
   
-  // No match found in our predefined list
   return null;
 }
 
 /**
- * Normalizes a city name to a standard form
+ * Normalizuje a extrahuje jméno města z české adresy
+ */
+function extractCityFromAddress(address: string | null): string | null {
+  return extractCityFromText(address);
+}
+
+/**
+ * Normalizuje a extrahuje jméno města ze jména zadavatele
+ */
+function extractCityFromContractingAuthority(authority: string | null): string | null {
+  return extractCityFromText(authority);
+}
+
+/**
+ * Normalizuje jméno města do standardní podoby
  */
 function normalizeCityName(city: string): string {
   if (!city) return '';
@@ -89,7 +121,7 @@ function normalizeCityName(city: string): string {
 }
 
 /**
- * Get the base city data for a city name
+ * Získá základní data o městě podle jména
  */
 function getBaseCityData(cityName: string): (typeof CITY_BASE_DATA)[0] | null {
   if (!cityName) return null;
@@ -114,7 +146,7 @@ function getBaseCityData(cityName: string): (typeof CITY_BASE_DATA)[0] | null {
 }
 
 /**
- * Fetches city-based statistics by grouping all contracts by city from address
+ * Načte statistiky měst a rozdělí zakázky do příslušných měst nebo do kategorie "Nezařazeno"
  */
 export async function fetchActualCityStats(): Promise<EntityStats[]> {
   try {
@@ -153,20 +185,10 @@ export async function fetchActualCityStats(): Promise<EntityStats[]> {
       return fallbackData;
     }
 
-    // Check if zadavatel_adresa column exists
-    const hasAddressCol = await checkColumnExists(smlouvaTable, 'zadavatel_adresa');
-    
-    if (!hasAddressCol) {
-      console.warn("zadavatel_adresa column not found in database, using fallback data");
-      return CITY_BASE_DATA.map(city => ({
-        ...city,
-        contractsCount: 0,
-        totalValue: 0
-      }));
-    }
-
     // Initialize city stats map with base cities (all have 0 contracts by default)
     const cityStatsMap = new Map<string, EntityStats>();
+    
+    // Add base cities to the map
     for (const baseCity of CITY_BASE_DATA) {
       cityStatsMap.set(baseCity.id, {
         ...baseCity,
@@ -175,50 +197,81 @@ export async function fetchActualCityStats(): Promise<EntityStats[]> {
       });
     }
     
-    // Get all contracts with addresses
-    const contractAddresses = await prisma.$queryRawUnsafe(`
+    // Also initialize the "Nezařazeno" category
+    const uncategorizedStats: EntityStats = {
+      ...UNCATEGORIZED_ENTITY,
+      contractsCount: 0,
+      totalValue: 0
+    };
+
+    // Check if zadavatel_adresa column exists
+    const hasAddressCol = await checkColumnExists(smlouvaTable, 'zadavatel_adresa');
+    
+    // Get all contracts grouped by zadavatel and/or zadavatel_adresa
+    const contractGroups = await prisma.$queryRawUnsafe(`
       SELECT 
-        zadavatel_adresa as address,
+        zadavatel,
+        ${hasAddressCol ? 'zadavatel_adresa,' : ''}
         COUNT(*) as contract_count, 
         SUM(castka) as total_value
       FROM "${smlouvaTable}"
-      WHERE zadavatel_adresa IS NOT NULL AND zadavatel_adresa != ''
-      GROUP BY zadavatel_adresa
+      WHERE zadavatel IS NOT NULL AND zadavatel != ''
+      GROUP BY zadavatel${hasAddressCol ? ', zadavatel_adresa' : ''}
     `);
     
-    // Process contract addresses and match with cities
-    if (Array.isArray(contractAddresses)) {
-      for (const item of contractAddresses) {
-        const address = item.address;
+    // Process all contract groups
+    if (Array.isArray(contractGroups)) {
+      for (const item of contractGroups) {
         const contractCount = parseInt(item.contract_count || '0');
         const totalValue = parseFloat(item.total_value || '0');
         
         // Skip if no valid data
-        if (!address || contractCount <= 0) continue;
+        if (contractCount <= 0) continue;
         
-        // Extract city from address
-        const cityName = extractCityFromAddress(address);
-        if (!cityName) continue;
-        
-        // Get the base city data
-        const baseCity = getBaseCityData(cityName);
-        if (!baseCity) continue; // Skip if not in our predefined list
-        
-        // Update city stats
-        const cityId = baseCity.id;
-        if (cityStatsMap.has(cityId)) {
-          const existingStats = cityStatsMap.get(cityId)!;
-          cityStatsMap.set(cityId, {
-            ...existingStats,
-            contractsCount: existingStats.contractsCount + contractCount,
-            totalValue: existingStats.totalValue + totalValue
-          });
+        // Try to extract city from address or authority name
+        let cityName = null;
+        if (hasAddressCol && item.zadavatel_adresa) {
+          cityName = extractCityFromAddress(item.zadavatel_adresa);
         }
+        
+        // If no city found from address, try from authority name
+        if (!cityName && item.zadavatel) {
+          cityName = extractCityFromContractingAuthority(item.zadavatel);
+        }
+        
+        if (cityName) {
+          // Get base city data
+          const baseCity = getBaseCityData(cityName);
+          
+          if (baseCity) {
+            // Update city stats
+            const cityId = baseCity.id;
+            if (cityStatsMap.has(cityId)) {
+              const existingStats = cityStatsMap.get(cityId)!;
+              cityStatsMap.set(cityId, {
+                ...existingStats,
+                contractsCount: existingStats.contractsCount + contractCount,
+                totalValue: existingStats.totalValue + totalValue
+              });
+            }
+            continue; // Processed as a known city
+          }
+        }
+        
+        // If we get here, add to the "Nezařazeno" category
+        uncategorizedStats.contractsCount += contractCount;
+        uncategorizedStats.totalValue += totalValue;
       }
+    }
+    
+    // Add "Nezařazeno" to the map if it has any contracts
+    if (uncategorizedStats.contractsCount > 0) {
+      cityStatsMap.set(uncategorizedStats.id, uncategorizedStats);
     }
     
     // Convert map to array and sort by contract count (descending)
     const cityStats = Array.from(cityStatsMap.values())
+      .filter(city => city.contractsCount > 0) // Only include cities with contracts
       .sort((a, b) => b.contractsCount - a.contractsCount);
     
     // Cache the results
@@ -263,10 +316,10 @@ export async function fetchEntityDetail(entityId: string) {
     // Get all city data
     const allCities = await fetchActualCityStats();
     
-    // Find the specific city
-    const city = allCities.find(c => c.id === entityId);
+    // Find the specific entity (city or uncategorized)
+    const entity = allCities.find(c => c.id === entityId);
     
-    if (!city) {
+    if (!entity) {
       return null;
     }
     
@@ -285,11 +338,21 @@ export async function fetchEntityDetail(entityId: string) {
     // Check if zadavatel_adresa column exists
     const hasAddressCol = await checkColumnExists(smlouvaTable, 'zadavatel_adresa');
     
-    // Prepare query based on whether address column exists
-    let cityQuery;
-    if (hasAddressCol) {
-      // Match all contracts where address contains the city name
-      cityQuery = `
+    let entityQuery;
+    let searchPattern;
+    
+    if (entity.id === UNCATEGORIZED_ENTITY.id) {
+      // Special query for "Nezařazeno" category - include all items not matching any city
+      let cityExclusionConditions = [];
+      
+      for (const city of CITY_BASE_DATA) {
+        if (hasAddressCol) {
+          cityExclusionConditions.push(`(zadavatel_adresa NOT LIKE '%${city.name}%' OR zadavatel_adresa IS NULL)`);
+        }
+        cityExclusionConditions.push(`zadavatel NOT LIKE '%${city.name}%'`);
+      }
+      
+      entityQuery = `
         SELECT 
           COUNT(*) as contract_count,
           SUM(castka) as total_value,
@@ -299,65 +362,126 @@ export async function fetchEntityDetail(entityId: string) {
           MAX(datum) as latest_date,
           COUNT(DISTINCT dodavatel) as supplier_count
         FROM "${smlouvaTable}"
-        WHERE zadavatel_adresa LIKE $1
+        WHERE ${cityExclusionConditions.join(' AND ')}
       `;
+      
+      searchPattern = null; // Not needed for this query
     } else {
-      // Fallback if no address column - use zadavatel containing city name
-      cityQuery = `
-        SELECT 
-          COUNT(*) as contract_count,
-          SUM(castka) as total_value,
-          AVG(castka) as avg_value,
-          MAX(castka) as max_value,
-          MIN(datum) as earliest_date,
-          MAX(datum) as latest_date,
-          COUNT(DISTINCT dodavatel) as supplier_count
-        FROM "${smlouvaTable}"
-        WHERE zadavatel LIKE $1
-      `;
+      // Regular city query
+      if (hasAddressCol) {
+        // Match contracts where address or authority name contains the city name
+        entityQuery = `
+          SELECT 
+            COUNT(*) as contract_count,
+            SUM(castka) as total_value,
+            AVG(castka) as avg_value,
+            MAX(castka) as max_value,
+            MIN(datum) as earliest_date,
+            MAX(datum) as latest_date,
+            COUNT(DISTINCT dodavatel) as supplier_count
+          FROM "${smlouvaTable}"
+          WHERE zadavatel_adresa LIKE $1 OR zadavatel LIKE $1
+        `;
+      } else {
+        // Fallback if no address column - use zadavatel containing city name
+        entityQuery = `
+          SELECT 
+            COUNT(*) as contract_count,
+            SUM(castka) as total_value,
+            AVG(castka) as avg_value,
+            MAX(castka) as max_value,
+            MIN(datum) as earliest_date,
+            MAX(datum) as latest_date,
+            COUNT(DISTINCT dodavatel) as supplier_count
+          FROM "${smlouvaTable}"
+          WHERE zadavatel LIKE $1
+        `;
+      }
+      
+      searchPattern = `%${entity.name}%`;
     }
     
-    // Run the query with the city name as a parameter
-    const searchPattern = `%${city.name}%`;
-    const stats = await prisma.$queryRawUnsafe(cityQuery, searchPattern);
+    // Run the query
+    let stats;
+    if (searchPattern) {
+      stats = await prisma.$queryRawUnsafe(entityQuery, searchPattern);
+    } else {
+      stats = await prisma.$queryRawUnsafe(entityQuery);
+    }
     
     const entityStats = Array.isArray(stats) && stats.length > 0 ? stats[0] : null;
     
-    // Get top suppliers for this city
+    // Get top suppliers for this entity
     let suppliersQuery;
-    if (hasAddressCol) {
-      // Using address column
+    
+    if (entity.id === UNCATEGORIZED_ENTITY.id) {
+      // Special query for "Nezařazeno" category
+      let cityExclusionConditions = [];
+      
+      for (const city of CITY_BASE_DATA) {
+        if (hasAddressCol) {
+          cityExclusionConditions.push(`(zadavatel_adresa NOT LIKE '%${city.name}%' OR zadavatel_adresa IS NULL)`);
+        }
+        cityExclusionConditions.push(`zadavatel NOT LIKE '%${city.name}%'`);
+      }
+      
       suppliersQuery = `
         SELECT 
           dodavatel,
           COUNT(*) as contract_count,
           SUM(castka) as total_value
         FROM "${smlouvaTable}"
-        WHERE zadavatel_adresa LIKE $1
+        WHERE ${cityExclusionConditions.join(' AND ')}
         GROUP BY dodavatel
         ORDER BY SUM(castka) DESC
         LIMIT 5
       `;
+      
+      searchPattern = null; // Not needed for this query
     } else {
-      // Fallback
-      suppliersQuery = `
-        SELECT 
-          dodavatel,
-          COUNT(*) as contract_count,
-          SUM(castka) as total_value
-        FROM "${smlouvaTable}"
-        WHERE zadavatel LIKE $1
-        GROUP BY dodavatel
-        ORDER BY SUM(castka) DESC
-        LIMIT 5
-      `;
+      // Regular city query
+      if (hasAddressCol) {
+        // Using address and authority name
+        suppliersQuery = `
+          SELECT 
+            dodavatel,
+            COUNT(*) as contract_count,
+            SUM(castka) as total_value
+          FROM "${smlouvaTable}"
+          WHERE zadavatel_adresa LIKE $1 OR zadavatel LIKE $1
+          GROUP BY dodavatel
+          ORDER BY SUM(castka) DESC
+          LIMIT 5
+        `;
+      } else {
+        // Fallback
+        suppliersQuery = `
+          SELECT 
+            dodavatel,
+            COUNT(*) as contract_count,
+            SUM(castka) as total_value
+          FROM "${smlouvaTable}"
+          WHERE zadavatel LIKE $1
+          GROUP BY dodavatel
+          ORDER BY SUM(castka) DESC
+          LIMIT 5
+        `;
+      }
+      
+      searchPattern = `%${entity.name}%`;
     }
     
-    const topSuppliers = await prisma.$queryRawUnsafe(suppliersQuery, searchPattern);
+    // Run suppliers query
+    let topSuppliers;
+    if (searchPattern) {
+      topSuppliers = await prisma.$queryRawUnsafe(suppliersQuery, searchPattern);
+    } else {
+      topSuppliers = await prisma.$queryRawUnsafe(suppliersQuery);
+    }
     
     // Combine all the data
-    const cityDetail = {
-      ...city,
+    const entityDetail = {
+      ...entity,
       stats: entityStats || {
         contract_count: 0,
         total_value: 0,
@@ -371,11 +495,11 @@ export async function fetchEntityDetail(entityId: string) {
     };
     
     // Cache the detail
-    await cacheStats(cacheKey, cityDetail);
+    await cacheStats(cacheKey, entityDetail);
     
-    return cityDetail;
+    return entityDetail;
   } catch (error) {
-    console.error(`Error fetching details for city ${entityId}:`, error);
+    console.error(`Error fetching details for entity ${entityId}:`, error);
     return null;
   }
 }
