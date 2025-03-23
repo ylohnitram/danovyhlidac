@@ -2,8 +2,8 @@
   "version": 2,
   "crons": [
     {
-      "path": "/api/cron/sync-data",
-      "schedule": "0 6 * * *"
+      "path": "/api/cache/warm",
+      "schedule": "0 */6 * * *"
     }
   ]
 }

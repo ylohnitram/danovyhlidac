@@ -1,41 +1,89 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { ChevronLeft, ChevronRight } from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Loader2 } from "lucide-react"
+import { fetchTopContractors } from "@/app/actions/contractor-stats"
+import CacheStatusIndicator from "@/components/cache-status-indicator"
 
-// Mock data for top contractors
-const TOP_CONTRACTORS = [
-  { id: 1, name: "Metrostav a.s.", contracts: 156, totalAmount: 12500000000 },
-  { id: 2, name: "Skanska a.s.", contracts: 142, totalAmount: 9800000000 },
-  { id: 3, name: "Eurovia CS, a.s.", contracts: 128, totalAmount: 8700000000 },
-  { id: 4, name: "STRABAG a.s.", contracts: 115, totalAmount: 7600000000 },
-  { id: 5, name: "HOCHTIEF CZ a.s.", contracts: 98, totalAmount: 6200000000 },
-  { id: 6, name: "OHL ŽS, a.s.", contracts: 87, totalAmount: 5400000000 },
-  { id: 7, name: "VCES a.s.", contracts: 76, totalAmount: 4800000000 },
-  { id: 8, name: "BAK stavební společnost, a.s.", contracts: 65, totalAmount: 3900000000 },
-  { id: 9, name: "GEOSAN GROUP a.s.", contracts: 54, totalAmount: 3200000000 },
-  { id: 10, name: "Chládek a Tintěra, a.s.", contracts: 43, totalAmount: 2800000000 },
-  { id: 11, name: "COLAS CZ, a.s.", contracts: 39, totalAmount: 2500000000 },
-  { id: 12, name: "M - SILNICE a.s.", contracts: 35, totalAmount: 2200000000 },
-  { id: 13, name: "SWIETELSKY stavební s.r.o.", contracts: 32, totalAmount: 1900000000 },
-  { id: 14, name: "PORR a.s.", contracts: 28, totalAmount: 1700000000 },
-  { id: 15, name: "IMOS Brno, a.s.", contracts: 25, totalAmount: 1500000000 },
-]
+// Type for top contractor
+interface TopContractor {
+  name: string;
+  contracts: number;
+  totalAmount: number;
+}
 
 export default function TopContractors() {
-  const [page, setPage] = useState(1)
-  const pageSize = 5
-  const totalPages = Math.ceil(TOP_CONTRACTORS.length / pageSize)
+  const [loading, setLoading] = useState(true);
+  const [topContractors, setTopContractors] = useState<TopContractor[]>([]);
+  const [isCached, setIsCached] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const startIndex = (page - 1) * pageSize
-  const endIndex = startIndex + pageSize
-  const currentPageData = TOP_CONTRACTORS.slice(startIndex, endIndex)
+  // Load contractors data
+  const loadContractorsData = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Call the server action to fetch top contractors
+      const result = await fetchTopContractors(10); // Get top 10
+      
+      if (result.success) {
+        setTopContractors(result.data);
+        setIsCached(result.cached || false);
+      } else {
+        setError(result.error || "Chyba při načítání dat");
+        setTopContractors([]);
+      }
+    } catch (err) {
+      console.error("Error loading top contractors:", err);
+      setError("Nepodařilo se načíst data o top dodavatelích.");
+      setTopContractors([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load data on mount
+  useEffect(() => {
+    loadContractorsData();
+  }, []);
+
+  // Handle refresh
+  const handleRefresh = async () => {
+    await loadContractorsData();
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center py-6">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <div className="text-center text-muted-foreground py-4">
+            <p>{error}</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>Top 10 dodavatelů</CardTitle>
+        <CacheStatusIndicator
+          isCached={isCached}
+          onRefresh={handleRefresh}
+        />
+      </CardHeader>
       <CardContent className="p-0">
         <Table>
           <TableHeader>
@@ -47,44 +95,27 @@ export default function TopContractors() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {currentPageData.map((contractor, index) => (
-              <TableRow key={contractor.id}>
-                <TableCell className="font-medium">{startIndex + index + 1}</TableCell>
-                <TableCell>{contractor.name}</TableCell>
-                <TableCell className="text-right">{contractor.contracts}</TableCell>
-                <TableCell className="text-right font-medium">
-                  {(contractor.totalAmount / 1000000).toFixed(0)} mil. Kč
+            {topContractors.length > 0 ? (
+              topContractors.map((contractor, index) => (
+                <TableRow key={index}>
+                  <TableCell className="font-medium">{index + 1}</TableCell>
+                  <TableCell>{contractor.name}</TableCell>
+                  <TableCell className="text-right">{contractor.contracts}</TableCell>
+                  <TableCell className="text-right font-medium">
+                    {(contractor.totalAmount / 1000000).toFixed(0)} mil. Kč
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : (
+              <TableRow>
+                <TableCell colSpan={4} className="text-center py-4 text-muted-foreground">
+                  Žádní dodavatelé nebyli nalezeni
                 </TableCell>
               </TableRow>
-            ))}
+            )}
           </TableBody>
         </Table>
-
-        <div className="flex items-center justify-end p-4 border-t">
-          <div className="flex items-center space-x-2">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              Strana {page} z {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
       </CardContent>
     </Card>
   )
 }
-
