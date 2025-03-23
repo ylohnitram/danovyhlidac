@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 import Link from "next/link"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { MapPin, ArrowRight, Buildings, FileText, Users } from "lucide-react"
+import { MapPin, ArrowRight, Building, FileText, Users } from "lucide-react"
 import { fetchCityStats } from "@/app/actions/city-stats"
 import { Suspense } from "react"
 import { Loader2 } from "lucide-react"
@@ -34,7 +34,7 @@ export default function CitiesPage() {
       
       <div className="mt-12 bg-blue-50 rounded-lg p-6">
         <h2 className="text-xl font-semibold mb-4 flex items-center">
-          <Buildings className="h-5 w-5 text-blue-600 mr-2" />
+          <Building className="h-5 w-5 text-blue-600 mr-2" />
           Proč je důležité sledovat zakázky ve vašem městě?
         </h2>
         <p className="mb-4">
