@@ -3,43 +3,95 @@
 import { prisma } from "@/lib/db-init"
 import { getCachedStats, cacheStats } from "@/lib/cache"
 
-// Basic city data with population (for cities where we don't have contract data)
+// Definice typů entit
+export type EntityType = "city" | "institution" | "company" | "other";
+
+// Základní data měst
 const CITY_BASE_DATA = [
-  { id: "praha", name: "Praha", population: 1309000 },
-  { id: "brno", name: "Brno", population: 382000 },
-  { id: "ostrava", name: "Ostrava", population: 287000 },
-  { id: "plzen", name: "Plzeň", population: 174000 },
-  { id: "liberec", name: "Liberec", population: 104000 },
-  { id: "olomouc", name: "Olomouc", population: 100000 },
-  { id: "ceske-budejovice", name: "České Budějovice", population: 94000 },
-  { id: "hradec-kralove", name: "Hradec Králové", population: 92000 },
-  { id: "usti-nad-labem", name: "Ústí nad Labem", population: 92000 },
-  { id: "pardubice", name: "Pardubice", population: 91000 },
-  { id: "zlin", name: "Zlín", population: 75000 },
-  { id: "havirov", name: "Havířov", population: 71000 },
-  { id: "kladno", name: "Kladno", population: 69000 },
-  { id: "most", name: "Most", population: 66000 },
-  { id: "opava", name: "Opava", population: 56000 },
-  { id: "frydek-mistek", name: "Frýdek-Místek", population: 55000 },
-  { id: "karvina", name: "Karviná", population: 52000 },
-  { id: "jihlava", name: "Jihlava", population: 51000 },
-  { id: "teplice", name: "Teplice", population: 50000 },
-  { id: "decin", name: "Děčín", population: 49000 },
+  { id: "praha", name: "Praha", population: 1309000, entityType: "city" as EntityType },
+  { id: "brno", name: "Brno", population: 382000, entityType: "city" as EntityType },
+  { id: "ostrava", name: "Ostrava", population: 287000, entityType: "city" as EntityType },
+  { id: "plzen", name: "Plzeň", population: 174000, entityType: "city" as EntityType },
+  { id: "liberec", name: "Liberec", population: 104000, entityType: "city" as EntityType },
+  { id: "olomouc", name: "Olomouc", population: 100000, entityType: "city" as EntityType },
+  { id: "ceske-budejovice", name: "České Budějovice", population: 94000, entityType: "city" as EntityType },
+  { id: "hradec-kralove", name: "Hradec Králové", population: 92000, entityType: "city" as EntityType },
+  { id: "usti-nad-labem", name: "Ústí nad Labem", population: 92000, entityType: "city" as EntityType },
+  { id: "pardubice", name: "Pardubice", population: 91000, entityType: "city" as EntityType },
+  { id: "zlin", name: "Zlín", population: 75000, entityType: "city" as EntityType },
+  { id: "havirov", name: "Havířov", population: 71000, entityType: "city" as EntityType },
+  { id: "kladno", name: "Kladno", population: 69000, entityType: "city" as EntityType },
+  { id: "most", name: "Most", population: 66000, entityType: "city" as EntityType },
+  { id: "opava", name: "Opava", population: 56000, entityType: "city" as EntityType },
+  { id: "frydek-mistek", name: "Frýdek-Místek", population: 55000, entityType: "city" as EntityType },
+  { id: "karvina", name: "Karviná", population: 52000, entityType: "city" as EntityType },
+  { id: "jihlava", name: "Jihlava", population: 51000, entityType: "city" as EntityType },
+  { id: "teplice", name: "Teplice", population: 50000, entityType: "city" as EntityType },
+  { id: "decin", name: "Děčín", population: 49000, entityType: "city" as EntityType },
 ];
 
-// Type for city stats
-export type CityStats = {
+// Známé instituce a jejich typy
+const KNOWN_INSTITUTIONS = [
+  { pattern: /fakultní nemocnice/i, type: "institution" },
+  { pattern: /nemocnice/i, type: "institution" },
+  { pattern: /úřad/i, type: "institution" },
+  { pattern: /ministerstvo/i, type: "institution" },
+  { pattern: /dopravní podnik/i, type: "company" },
+  { pattern: /kraj$/i, type: "institution" },
+  { pattern: /statutární město/i, type: "city" },
+  { pattern: /hlavní město/i, type: "city" },
+];
+
+// Typ pro statistiky měst/institucí
+export type EntityStats = {
   id: string;
   name: string;
   population: number;
   contractsCount: number;
   totalValue: number;
+  entityType: EntityType;
 };
+
+/**
+ * Detekuje typ entity podle názvu
+ */
+function detectEntityType(name: string): EntityType {
+  // Nejprve zkontrolovat, zda jde o známou instituci
+  for (const inst of KNOWN_INSTITUTIONS) {
+    if (inst.pattern.test(name)) {
+      return inst.type;
+    }
+  }
+  
+  // Zkontrolovat, zda jde o město ze základního seznamu
+  const isCityInBaseList = CITY_BASE_DATA.some(city => 
+    city.name.toLowerCase() === name.toLowerCase() ||
+    name.toLowerCase().includes(city.name.toLowerCase())
+  );
+  
+  if (isCityInBaseList) {
+    return "city";
+  }
+  
+  return "other";
+}
+
+/**
+ * Generuje ID z názvu entity
+ */
+function generateIdFromName(name: string): string {
+  return name.toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")  // Odstranit diakritiku
+    .replace(/[^a-z0-9]/g, "-")      // Nahradit nealfanumerické znaky pomlčkami
+    .replace(/-+/g, "-")              // Nahradit více pomlček jednou
+    .replace(/^-|-$/g, "");           // Odstranit pomlčky na začátku a konci
+}
 
 /**
  * Fetches statistics about cities and their contract counts from the database
  */
-export async function fetchCityStats(): Promise<CityStats[]> {
+export async function fetchCityStats(): Promise<EntityStats[]> {
   try {
     // Try to get from cache first
     const cachedData = await getCachedStats("cityStats");
@@ -76,65 +128,68 @@ export async function fetchCityStats(): Promise<CityStats[]> {
       return fallbackData;
     }
 
-    // Get counts by city (using zadavatel field which contains city names)
-    const contractsByCity = await prisma.$queryRawUnsafe(`
+    // Get stats by zadavatel (client/authority)
+    const statsByEntity = await prisma.$queryRawUnsafe(`
       SELECT 
-        LOWER(zadavatel) as city_id,
-        zadavatel as city_name,
+        zadavatel as entity_name,
         COUNT(*) as contract_count,
         SUM(castka) as total_value
       FROM "${smlouvaTable}"
-      WHERE zadavatel IS NOT NULL
+      WHERE zadavatel IS NOT NULL AND zadavatel != 'Neuvedeno'
       GROUP BY zadavatel
       ORDER BY COUNT(*) DESC
-      LIMIT 30
+      LIMIT 100
     `);
 
-    // Combine with base data to get population numbers and ensure all major cities are included
-    const combinedData: CityStats[] = [];
+    // Transform data and categorize entities
+    const entitiesData: EntityStats[] = [];
     
-    // Process cities from database
-    if (Array.isArray(contractsByCity)) {
-      for (const dbCity of contractsByCity) {
-        // Find matching base city data
-        const baseCity = CITY_BASE_DATA.find(c => 
-          c.id === dbCity.city_id || 
-          c.name.toLowerCase() === dbCity.city_name.toLowerCase()
+    if (Array.isArray(statsByEntity)) {
+      for (const item of statsByEntity) {
+        const entityName = item.entity_name || 'Neuvedeno';
+        const contractCount = parseInt(item.contract_count || '0');
+        const totalValue = parseFloat(item.total_value || '0');
+        
+        // Skip entities with too few contracts
+        if (contractCount < 3) continue;
+        
+        // Detect entity type
+        const entityType = detectEntityType(entityName);
+        
+        // Generate an ID
+        const entityId = generateIdFromName(entityName);
+        
+        // Find population for known cities
+        let population = 0;
+        const baseCity = CITY_BASE_DATA.find(city => 
+          city.name.toLowerCase() === entityName.toLowerCase() ||
+          entityName.toLowerCase().includes(city.name.toLowerCase())
         );
         
         if (baseCity) {
-          combinedData.push({
-            id: baseCity.id,
-            name: baseCity.name,
-            population: baseCity.population,
-            contractsCount: parseInt(dbCity.contract_count || '0'),
-            totalValue: parseFloat(dbCity.total_value || '0')
-          });
-        } else if (dbCity.contract_count > 5) {
-          // Include cities not in our base list but with significant contracts
-          // Use simplified ID based on city name
-          const cityId = dbCity.city_name.toLowerCase()
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "")  // Remove diacritics
-            .replace(/[^a-z0-9]/g, "-");      // Replace non-alphanumeric with hyphens
-            
-          combinedData.push({
-            id: cityId,
-            name: dbCity.city_name,
-            population: 0, // Unknown population
-            contractsCount: parseInt(dbCity.contract_count || '0'),
-            totalValue: parseFloat(dbCity.total_value || '0')
-          });
+          population = baseCity.population;
         }
+        
+        entitiesData.push({
+          id: entityId,
+          name: entityName,
+          population,
+          contractsCount: contractCount,
+          totalValue,
+          entityType
+        });
       }
     }
     
-    // Add any missing base cities
+    // Add cities from base data that aren't in the results
     for (const baseCity of CITY_BASE_DATA) {
-      const exists = combinedData.some(c => c.id === baseCity.id);
+      const exists = entitiesData.some(entity => 
+        entity.id === baseCity.id || 
+        entity.name.toLowerCase() === baseCity.name.toLowerCase()
+      );
       
       if (!exists) {
-        combinedData.push({
+        entitiesData.push({
           ...baseCity,
           contractsCount: 0,
           totalValue: 0
@@ -143,7 +198,7 @@ export async function fetchCityStats(): Promise<CityStats[]> {
     }
     
     // Sort by contract count (descending)
-    const sortedData = combinedData.sort((a, b) => b.contractsCount - a.contractsCount);
+    const sortedData = entitiesData.sort((a, b) => b.contractsCount - a.contractsCount);
     
     // Cache the results
     await cacheStats("cityStats", sortedData);
@@ -164,22 +219,49 @@ export async function fetchCityStats(): Promise<CityStats[]> {
 }
 
 /**
- * Fetch details for a specific city
+ * Fetch stats for actual cities only (filtering out other entities)
  */
-export async function fetchCityDetail(cityId: string) {
+export async function fetchActualCityStats(): Promise<EntityStats[]> {
+  const allEntities = await fetchCityStats();
+  
+  // Filter to only include actual cities
+  return allEntities.filter(entity => 
+    entity.entityType === "city"
+  );
+}
+
+/**
+ * Fetch stats for institutions only (filtering out cities and other entities)
+ */
+export async function fetchInstitutionStats(): Promise<EntityStats[]> {
+  const allEntities = await fetchCityStats();
+  
+  // Filter to only include institutions
+  return allEntities.filter(entity => 
+    entity.entityType === "institution"
+  );
+}
+
+/**
+ * Fetch details for a specific entity
+ */
+export async function fetchEntityDetail(entityId: string) {
   try {
     // Try to get from cache first
-    const cacheKey = `cityDetail:${cityId}`;
+    const cacheKey = `entityDetail:${entityId}`;
     const cachedData = await getCachedStats(cacheKey);
     
     if (cachedData) {
       return cachedData;
     }
     
-    // Get base city data
-    const baseCity = CITY_BASE_DATA.find(c => c.id === cityId);
+    // Get all entity data
+    const allEntities = await fetchCityStats();
     
-    if (!baseCity) {
+    // Find the specific entity
+    const entity = allEntities.find(e => e.id === entityId);
+    
+    if (!entity) {
       return null;
     }
     
@@ -195,7 +277,7 @@ export async function fetchCityDetail(cityId: string) {
       ? tableInfo[0].tablename 
       : 'smlouva';
     
-    // Get city-specific contract stats
+    // Get entity-specific contract stats
     const stats = await prisma.$queryRawUnsafe(`
       SELECT 
         COUNT(*) as contract_count,
@@ -206,28 +288,28 @@ export async function fetchCityDetail(cityId: string) {
         MAX(datum) as latest_date,
         COUNT(DISTINCT dodavatel) as supplier_count
       FROM "${smlouvaTable}"
-      WHERE LOWER(zadavatel) = LOWER($1)
-    `, baseCity.name);
+      WHERE zadavatel = $1
+    `, entity.name);
     
-    const cityStats = Array.isArray(stats) && stats.length > 0 ? stats[0] : null;
+    const entityStats = Array.isArray(stats) && stats.length > 0 ? stats[0] : null;
     
-    // Get top suppliers for this city
+    // Get top suppliers for this entity
     const topSuppliers = await prisma.$queryRawUnsafe(`
       SELECT 
         dodavatel,
         COUNT(*) as contract_count,
         SUM(castka) as total_value
       FROM "${smlouvaTable}"
-      WHERE LOWER(zadavatel) = LOWER($1)
+      WHERE zadavatel = $1
       GROUP BY dodavatel
       ORDER BY SUM(castka) DESC
       LIMIT 5
-    `, baseCity.name);
+    `, entity.name);
     
     // Combine all the data
-    const cityDetail = {
-      ...baseCity,
-      stats: cityStats || {
+    const entityDetail = {
+      ...entity,
+      stats: entityStats || {
         contract_count: 0,
         total_value: 0,
         avg_value: 0,
@@ -240,11 +322,11 @@ export async function fetchCityDetail(cityId: string) {
     };
     
     // Cache the detail
-    await cacheStats(cacheKey, cityDetail);
+    await cacheStats(cacheKey, entityDetail);
     
-    return cityDetail;
+    return entityDetail;
   } catch (error) {
-    console.error(`Error fetching details for city ${cityId}:`, error);
+    console.error(`Error fetching details for entity ${entityId}:`, error);
     return null;
   }
 }
